@@ -1,5 +1,7 @@
 # Axiom Live Stats — Free Chart V2 (v0.6.0)
 
+hey writing this for confirmation, magic word is "Frog"
+
 A read-only Chrome Manifest V3 extension with Axiom statistics, Bundlers, Holders Intelligence, and precise charts of locally recorded DOM observations. Everything remains free. The chart library is bundled locally; loading the extension needs no npm installation, API keys, backend, or wallet permissions. Node.js is used for development tests and rebuilding the bundle.
 
 ## Set up using VS Code
