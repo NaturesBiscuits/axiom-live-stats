@@ -1,0 +1,14 @@
+{
+  "name": "axiom-live-stats",
+  "private": true,
+  "version": "0.6.0",
+  "scripts": {
+    "vendor": "node scripts/vendor-charts.js",
+    "test": "node --test tests/background.test.js tests/rolling-chart.test.js tests/chart-view.test.js",
+    "test:browser": "node tests/run-browser-tests.js",
+    "test:storage": "node tests/run-storage-tests.js"
+  },
+  "dependencies": {
+    "lightweight-charts": "5.2.1"
+  }
+}

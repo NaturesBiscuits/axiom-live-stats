@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Axiom Live Stats</title>
+  <link rel="stylesheet" href="dashboard.css" />
+  <script src="rollingChartCollector.js" defer></script>
+  <script src="vendor/lightweight-charts.standalone.production.js" defer></script>
+  <script src="chartView.js" defer></script>
+  <script src="chartDashboard.js" defer></script>
+  <script src="dashboard.js" defer></script>
+</head>
+<body>
+  <main class="container">
+    <header class="header">
+      <div class="brand"><span class="mark">▲</span><div><strong>AXIOM LIVE STATS</strong><p>Read-only token dashboard · Free Chart V2</p></div></div>
+      <div id="status" class="status waiting"><span class="dot"></span><span id="statusText">Waiting for Axiom…</span></div>
+    </header>
+    <section class="token-panel">
+      <div><p class="eyebrow">ACTIVE TOKEN</p><h1 id="tokenTitle">Open a token page on Axiom</h1><a id="tokenLink" href="https://axiom.trade/" target="_blank" rel="noopener noreferrer">Open Axiom ↗</a></div>
+      <div class="right"><p class="eyebrow">LAST UPDATE</p><p id="updatedAt">—</p></div>
+    </section>
+    <section class="metrics">
+      <article class="card"><div class="label">Global Fees Paid</div><div class="value" id="globalFees">—</div></article>
+      <article class="card"><div class="label">Price (Axiom display)</div><div class="value" id="price">—</div></article>
+      <article class="card"><div class="label">Liquidity</div><div class="value" id="liquidity">—</div></article>
+      <article class="card"><div class="label">Supply</div><div class="value" id="supply">—</div></article>
+      <article class="card"><div class="label">All-Time High</div><div class="value" id="ath">—</div></article>
+      <article class="card"><div class="label">5m Volume</div><div class="value" id="volume5m">—</div></article>
+      <article class="card"><div class="label">Buys · Count / Value</div><div class="value buy" id="buys">—</div></article>
+      <article class="card"><div class="label">Sells · Count / Value</div><div class="value sell" id="sells">—</div></article>
+      <article class="card"><div class="label">Net Volume</div><div class="value" id="netVolume">—</div></article>
+      <article class="card"><div class="label">Holders</div><div class="value" id="holders">—</div></article>
+      <article class="card"><div class="label">Bundlers (Axiom)</div><div class="value" id="bundlers">—</div></article>
+    </section>
+    <section class="holders-intelligence" aria-labelledby="holdersHeading">
+      <div class="section-heading">
+        <div><p class="eyebrow">DOM OBSERVATIONS</p><h2 id="holdersHeading">Holders Intelligence</h2></div>
+        <span class="source-tag">Axiom classification</span>
+      </div>
+      <p class="section-note">Axiom's table is virtualized: only rendered rows are available. Open the Holders tab on Axiom to monitor them; this extension never scrolls the source page.</p>
+      <div class="holder-summary">
+        <article class="card"><div class="label">Total holders · Axiom reported</div><div class="value" id="holderTotal">—</div><p class="card-note">Reported count, not extracted rows</p></article>
+        <article class="card"><div class="label">Currently rendered holders</div><div class="value" id="holderRendered">—</div><p class="card-note">DOM observations only</p></article>
+        <article class="card"><div class="label">Axiom Bundlers · Rendered only</div><div class="value bundler-value" id="holderBundlers">—</div><p class="card-note">Not the token's total bundler count</p></article>
+        <article class="card"><div class="label">Session holders observed</div><div class="value" id="holderObserved">—</div><p class="card-note" id="holderObservedNote">Full-address identities only</p></article>
+        <article class="card coverage-card"><div class="label">Data coverage</div><div class="value" id="holderCoverage">Unavailable</div><p class="card-note" id="holderCoverageNote">Waiting for the source page</p></article>
+      </div>
+      <p id="holderTableStatus" class="table-status" role="status">Open a token's Holders tab on Axiom.</p>
+      <div class="holder-table-scroll" tabindex="0" role="region" aria-labelledby="holdersHeading">
+        <table class="holder-table">
+          <caption class="visually-hidden">Currently rendered holder rows from Axiom; incomplete coverage</caption>
+          <thead><tr>
+            <th scope="col">Rank</th><th scope="col">Wallet / identity</th><th scope="col">SOL balance</th>
+            <th scope="col">Last active</th><th scope="col">Bought / buys</th><th scope="col">Sold / sells</th>
+            <th scope="col">Unrealized PnL</th><th scope="col">Remaining / %</th><th scope="col">Funding</th>
+            <th scope="col">Held</th><th scope="col">Axiom Bundler</th>
+          </tr></thead>
+          <tbody id="holderRows"><tr><td colspan="11" class="empty-holders">Holder rows are not available yet.</td></tr></tbody>
+        </table>
+      </div>
+      <p class="section-note">The Bundler badge reproduces Axiom's flag; it does not independently verify transaction bundling. Unresolved wallet names, shortened addresses and ranks are never merged into session identities. Independent clustering and evidence scores are unavailable in Phase 1.</p>
+    </section>
+    <section class="chart-collector" aria-labelledby="chartHeading">
+      <div class="section-heading"><div><p class="eyebrow">FREE CHART V2</p><h2 id="chartHeading">Rolling 15-minute chart</h2></div><span class="source-tag">Locally recorded DOM samples</span></div>
+      <p class="section-note">Displayed values sampled once per second, up to 900 time slots. This is DOM sampling, not exchange tick data or OHLCV. Missing and stale values create gaps; no highs, lows or trade volume are synthesized.</p>
+      <dl class="chart-identity">
+        <div><dt>Blockchain · DOM hint</dt><dd id="chartNetwork">Unresolved</dd></div>
+        <div><dt>Mint · DOM hint</dt><dd id="chartMint">Unresolved in DOM</dd></div>
+        <div><dt>Pool · DOM hint</dt><dd id="chartPool">Unresolved in DOM</dd></div>
+      </dl>
+      <div class="chart-summary">
+        <article class="card"><div class="label">Actual sampling attempts · Up to 900</div><div class="value" id="chartCount">0</div><p class="card-note" id="chartCountNote">No samples received</p></article>
+        <article class="card"><label class="label" for="chartMetric">Displayed metric</label><select id="chartMetric"><option value="price">Price</option><option value="marketCap">Market cap</option></select><p class="card-note" id="chartUnit">Unit unavailable</p></article>
+        <article class="card"><div class="label">Sampling / delivery delay</div><div class="value" id="chartDelay">—</div><p class="card-note">Browser throttling can delay timers</p></article>
+        <article class="card"><div class="label">Source connection</div><div class="value" id="chartSource">Waiting</div><p class="card-note">DOM readability and delivery; upstream freshness unknown</p></article>
+      </div>
+      <div class="chart-controls"><label for="chartView">View</label><select id="chartView"><option value="live">Live 15-minute window</option><option value="recorded">Recorded 15-minute window</option></select><label>Recorded window end (UTC) <input id="chartRecordedEnd" type="datetime-local" step="1" disabled></label></div>
+      <div class="chart-times"><p>Last delivered: <span id="chartLastUpdate">—</span></p><p>Last DOM read: <span id="chartObservedAt">—</span></p><p>Last observed value change: <span id="chartChangedAt">—</span></p><p>Last sample: <span id="chartSampledAt">—</span></p></div>
+      <p id="chartWindow" class="card-note"></p>
+      <div class="rolling-chart-wrap"><div id="rollingChart" role="img" aria-label="Rolling fifteen-minute line chart of DOM observations; gaps remain unobserved"></div></div>
+      <p id="chartCursor" class="card-note">Move over the chart to inspect a time slot.</p>
+      <div class="chart-controls"><button id="chartRefresh" type="button">Reload local history</button><button id="chartExportJSONL" type="button" disabled>Export JSONL</button><button id="chartExportCSV" type="button" disabled>Export CSV</button></div>
+      <p id="chartMessage" class="table-status" role="status">Waiting for samples from the Axiom source page.</p>
+      <div class="chart-controls"><label>Retention <select id="chartRetention"><option value="0.25">15 minutes</option><option value="24" selected>24 hours</option><option value="72">3 days</option><option value="168">7 days</option></select></label><label>Global record limit <select id="chartRecordLimit"><option value="1000">1,000</option><option value="10000">10,000</option><option value="25000" selected>25,000</option><option value="50000">50,000</option><option value="100000">100,000</option></select></label><button id="chartSaveRetention" type="button">Save retention settings</button></div>
+      <p id="chartArchiveStatus" class="card-note" role="status">Opening local IndexedDB archive…</p>
+      <p class="section-note">IndexedDB saves actual sampling attempts by token, metric, unit and timestamp. Missed slots are gap markers, not recorded observations. Persistence is batched every 15 seconds; forced shutdown can lose a pending batch. Price and market cap are never converted using supply. Only locally observed periods are available; optional API backfill is disabled.</p>
+      <p class="card-note">TradingView Lightweight Charts™ · Copyright (с) 2025 TradingView, Inc. <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a> · bundled locally, Apache-2.0.</p>
+    </section>
+    <footer>Statistics, holders and the rolling chart reflect Axiom's rendered DOM. Keep the source page visible for reliable timing. Browser throttling and missing DOM updates create gaps.</footer>
+  </main>
+</body>
+</html>

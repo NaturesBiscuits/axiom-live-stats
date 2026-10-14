@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Axiom Live Stats",
+  "version": "0.6.0",
+  "description": "Free Axiom statistics, holder intelligence, precise local charts and IndexedDB observation history.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["https://axiom.trade/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_title": "Open Axiom Live Stats"},
+  "content_scripts": [
+    {"matches": ["https://axiom.trade/*"], "js": ["holderTableExtractor.js", "tokenContextDetector.js", "rollingChartCollector.js", "liveValueObserver.js", "content.js"], "run_at": "document_idle"}
+  ]
+}

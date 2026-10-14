@@ -1,0 +1,11 @@
+"use strict";
+const {copyFileSync, mkdirSync, readFileSync, writeFileSync} = require("node:fs");
+const {resolve} = require("node:path");
+const root = resolve(__dirname, "..");
+const destination = resolve(root, "vendor");
+mkdirSync(destination, {recursive: true});
+copyFileSync(resolve(root, "node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.js"), resolve(destination, "lightweight-charts.standalone.production.js"));
+copyFileSync(resolve(root, "node_modules/lightweight-charts/LICENSE"), resolve(destination, "lightweight-charts.LICENSE"));
+const version = JSON.parse(readFileSync(resolve(root, "node_modules/lightweight-charts/package.json"))).version;
+writeFileSync(resolve(destination, "NOTICE"), `TradingView Lightweight Charts™\nCopyright (с) 2025 TradingView, Inc. https://www.tradingview.com/\n\nBundled version: ${version}. Standalone build includes fancy-canvas (MIT) and tslib portions (0BSD), as documented by the package.\n`, "utf8");
+console.log(`Bundled Lightweight Charts ${version} locally.`);
