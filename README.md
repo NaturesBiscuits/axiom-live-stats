@@ -1,7 +1,5 @@
 # Axiom Live Stats — Free Chart V2 (v0.6.0)
 
-hey writing this for confirmation, magic word is "Frog"
-
 A read-only Chrome Manifest V3 extension with Axiom statistics, Bundlers, Holders Intelligence, and precise charts of locally recorded DOM observations. Everything remains free. The chart library is bundled locally; loading the extension needs no npm installation, API keys, backend, or wallet permissions. Node.js is used for development tests and rebuilding the bundle.
 
 ## Set up using VS Code
@@ -59,11 +57,11 @@ If Axiom has not rendered this tile, the dashboard displays —.
 
 Open the **Holders** tab on the Axiom token page. The new dashboard section appears beneath the existing market cards. It reports Axiom's total holder count, the currently rendered rows, Axiom-flagged bundlers **among those rows only**, address-resolved session observations, and coverage status. The scrollable dashboard table shows the currently rendered rows, including nearby virtualized rows, rather than a full holder list.
 
-The extractor is scoped to `[data-perf-id="token-table-holders"]`. It follows the supplied nine-column layout and positioned rows approximately 48px high (32–72px tolerated), with support for nested wrappers and explicit grid cells. A table observer coalesces mutations over 180ms and only publishes changed values. The existing market polling locates replacement tables; observers and pending callbacks disconnect when the table or token changes. The holder extractor adds no automatic scrolling, wallet API calls, Helius integration, or permissions.
+The extractor is scoped to `[data-perf-id="token-table-holders"]`. It maps fields from the table's headers and supports the supplied Solana layout and BNB/ETH layouts with a Fees Paid column. Zero-width Follow Sell controls are excluded from data cells. Nested wrappers, explicit grid cells and positioned rows approximately 48px high (32–72px tolerated) are supported. Without headers, the original nine-column layout and the captured EVM layout with recognizable Bought/Sold/currency markers are supported; unexplained layouts remain unavailable. A table observer coalesces mutations over 180ms and only publishes changed values. The existing market polling locates replacement tables; observers and pending callbacks disconnect when the table or token changes. The holder extractor adds no automatic scrolling, wallet API calls, Helius integration, or permissions.
 
 ### Extracted fields
 
-Each normalized row contains `rank`, `walletDisplay`, `walletAddress`, `identityStatus`, `solBalance`, `lastActive`, `boughtAmount`, `buyCount`, `soldAmount`, `sellCount`, `unrealizedPnl`, `remainingTokenValue`, `remainingPercentage`, `fundingSourceLabel`, `fundingTransactionUrl`, `holdingDuration`, and `axiomBundler`. Missing or ambiguous values remain `null` and appear as unavailable. Trade counts require an explicit field or a recognizable count label; unlabeled numbers are not guessed. Funding URLs require an HTTPS transaction path. The exact `img[alt="Bundler"]` badge is the source of the Axiom flag; other badges are ignored.
+Each normalized row contains `rank`, `walletDisplay`, `walletAddress`, `identityStatus`, `nativeBalance`, `balanceCurrency`, `lastActive`, `boughtAmount`, `buyCount`, `soldAmount`, `sellCount`, `unrealizedPnl`, `feesPaid`, `feesPaidCurrency`, `remainingTokenValue`, `remainingPercentage`, `fundingSourceLabel`, `fundingTransactionUrl`, `holdingDuration`, and `axiomBundler`. The legacy `solBalance` field remains populated only for identified SOL balances. The dashboard labels the balance currency and shows Fees Paid when that column is present. Missing or ambiguous values remain `null` and appear as unavailable. Trade counts require an explicit field, a recognizable count label, or the captured Bought/Sold `token quantity / count` format; unrelated numbers are not guessed. Semantic/CSS zero-count subscripts are preserved and expanded as decimal strings for holder amounts and percentages. Funding URLs require an HTTPS transaction path. The exact `img[alt="Bundler"]` badge is the source of the Axiom flag; other badges are ignored.
 
 Future fields `commonFundingSource`, `similarSolBalancePatterns`, `synchronizedBuys`, `sameBlockActivity`, `clusterId`, `evidenceScore`, and `clusterConfidence` remain `null`. A displayed funding label does not establish a common funding relationship. The dashboard does not calculate cluster scores or an overall Bundler percentage from rows.
 
@@ -100,7 +98,7 @@ The real-browser fixtures exercise the supplied row structure, every extracted f
 
 ### HTML inspection still needed
 
-The task supplied a selector and example extractor, not a complete live Axiom table capture. Automated fixtures validate that described structure; they do not establish compatibility with all current Axiom variants. Actual markup is still needed to confirm secondary count/last-active nodes, tooltip-only full addresses, column changes, chains, and any token switches without pathname changes. Unsupported rows are skipped with an inspection message; ambiguous fields stay unavailable. Phase 1 cannot establish unique identities for shortened wallets, full coverage, independent bundling, or wallet clusters.
+Regression fixtures include reduced user-provided SOL, BNB and ETH holder captures, including liquidity pools, Follow Sell controls, Fees Paid, abbreviated wallets and small subscript amounts. They validate these structures, not every current Axiom variant. New layouts, tooltip-only full addresses and token switches without pathname changes still need live inspection. Unsupported rows are skipped with an inspection message; ambiguous fields stay unavailable. Phase 1 cannot establish unique identities for shortened wallets, full coverage, independent bundling, or wallet clusters. After reloading the extension, compare balances, fees, Remaining, funding and held times on both SOL and EVM pages; coin age is not used to select a layout.
 
 ## Free Chart V2
 

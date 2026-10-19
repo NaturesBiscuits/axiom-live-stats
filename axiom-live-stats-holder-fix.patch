@@ -1,0 +1,496 @@
+diff --git a/README.md b/README.md
+index 6e1bbc1..c4089bf 100644
+--- a/README.md
++++ b/README.md
+@@ -59,11 +59,11 @@ If Axiom has not rendered this tile, the dashboard displays —.
+ 
+ Open the **Holders** tab on the Axiom token page. The new dashboard section appears beneath the existing market cards. It reports Axiom's total holder count, the currently rendered rows, Axiom-flagged bundlers **among those rows only**, address-resolved session observations, and coverage status. The scrollable dashboard table shows the currently rendered rows, including nearby virtualized rows, rather than a full holder list.
+ 
+-The extractor is scoped to `[data-perf-id="token-table-holders"]`. It follows the supplied nine-column layout and positioned rows approximately 48px high (32–72px tolerated), with support for nested wrappers and explicit grid cells. A table observer coalesces mutations over 180ms and only publishes changed values. The existing market polling locates replacement tables; observers and pending callbacks disconnect when the table or token changes. The holder extractor adds no automatic scrolling, wallet API calls, Helius integration, or permissions.
++The extractor is scoped to `[data-perf-id="token-table-holders"]`. It maps fields from the table's headers and supports the supplied Solana layout and BNB/ETH layouts with a Fees Paid column. Zero-width Follow Sell controls are excluded from data cells. Nested wrappers, explicit grid cells and positioned rows approximately 48px high (32–72px tolerated) are supported. Without headers, the original nine-column layout and the captured EVM layout with recognizable Bought/Sold/currency markers are supported; unexplained layouts remain unavailable. A table observer coalesces mutations over 180ms and only publishes changed values. The existing market polling locates replacement tables; observers and pending callbacks disconnect when the table or token changes. The holder extractor adds no automatic scrolling, wallet API calls, Helius integration, or permissions.
+ 
+ ### Extracted fields
+ 
+-Each normalized row contains `rank`, `walletDisplay`, `walletAddress`, `identityStatus`, `solBalance`, `lastActive`, `boughtAmount`, `buyCount`, `soldAmount`, `sellCount`, `unrealizedPnl`, `remainingTokenValue`, `remainingPercentage`, `fundingSourceLabel`, `fundingTransactionUrl`, `holdingDuration`, and `axiomBundler`. Missing or ambiguous values remain `null` and appear as unavailable. Trade counts require an explicit field or a recognizable count label; unlabeled numbers are not guessed. Funding URLs require an HTTPS transaction path. The exact `img[alt="Bundler"]` badge is the source of the Axiom flag; other badges are ignored.
++Each normalized row contains `rank`, `walletDisplay`, `walletAddress`, `identityStatus`, `nativeBalance`, `balanceCurrency`, `lastActive`, `boughtAmount`, `buyCount`, `soldAmount`, `sellCount`, `unrealizedPnl`, `feesPaid`, `feesPaidCurrency`, `remainingTokenValue`, `remainingPercentage`, `fundingSourceLabel`, `fundingTransactionUrl`, `holdingDuration`, and `axiomBundler`. The legacy `solBalance` field remains populated only for identified SOL balances. The dashboard labels the balance currency and shows Fees Paid when that column is present. Missing or ambiguous values remain `null` and appear as unavailable. Trade counts require an explicit field, a recognizable count label, or the captured Bought/Sold `token quantity / count` format; unrelated numbers are not guessed. Semantic/CSS zero-count subscripts are preserved and expanded as decimal strings for holder amounts and percentages. Funding URLs require an HTTPS transaction path. The exact `img[alt="Bundler"]` badge is the source of the Axiom flag; other badges are ignored.
+ 
+ Future fields `commonFundingSource`, `similarSolBalancePatterns`, `synchronizedBuys`, `sameBlockActivity`, `clusterId`, `evidenceScore`, and `clusterConfidence` remain `null`. A displayed funding label does not establish a common funding relationship. The dashboard does not calculate cluster scores or an overall Bundler percentage from rows.
+ 
+@@ -100,7 +100,7 @@ The real-browser fixtures exercise the supplied row structure, every extracted f
+ 
+ ### HTML inspection still needed
+ 
+-The task supplied a selector and example extractor, not a complete live Axiom table capture. Automated fixtures validate that described structure; they do not establish compatibility with all current Axiom variants. Actual markup is still needed to confirm secondary count/last-active nodes, tooltip-only full addresses, column changes, chains, and any token switches without pathname changes. Unsupported rows are skipped with an inspection message; ambiguous fields stay unavailable. Phase 1 cannot establish unique identities for shortened wallets, full coverage, independent bundling, or wallet clusters.
++Regression fixtures include reduced user-provided SOL, BNB and ETH holder captures, including liquidity pools, Follow Sell controls, Fees Paid, abbreviated wallets and small subscript amounts. They validate these structures, not every current Axiom variant. New layouts, tooltip-only full addresses and token switches without pathname changes still need live inspection. Unsupported rows are skipped with an inspection message; ambiguous fields stay unavailable. Phase 1 cannot establish unique identities for shortened wallets, full coverage, independent bundling, or wallet clusters. After reloading the extension, compare balances, fees, Remaining, funding and held times on both SOL and EVM pages; coin age is not used to select a layout.
+ 
+ ## Free Chart V2
+ 
+diff --git a/dashboard.html b/dashboard.html
+index b7fef83..fafd9a0 100644
+--- a/dashboard.html
++++ b/dashboard.html
+@@ -52,9 +52,9 @@
+         <table class="holder-table">
+           <caption class="visually-hidden">Currently rendered holder rows from Axiom; incomplete coverage</caption>
+           <thead><tr>
+-            <th scope="col">Rank</th><th scope="col">Wallet / identity</th><th scope="col">SOL balance</th>
++            <th scope="col">Rank</th><th scope="col">Wallet / identity</th><th scope="col" id="holderBalanceHeader">Native balance</th>
+             <th scope="col">Last active</th><th scope="col">Bought / buys</th><th scope="col">Sold / sells</th>
+-            <th scope="col">Unrealized PnL</th><th scope="col">Remaining / %</th><th scope="col">Funding</th>
++            <th scope="col">Unrealized PnL</th><th scope="col" id="holderFeesHeader" hidden>Fees paid</th><th scope="col">Remaining / %</th><th scope="col">Funding</th>
+             <th scope="col">Held</th><th scope="col">Axiom Bundler</th>
+           </tr></thead>
+           <tbody id="holderRows"><tr><td colspan="11" class="empty-holders">Holder rows are not available yet.</td></tr></tbody>
+diff --git a/dashboard.js b/dashboard.js
+index 09ec410..74b1703 100644
+--- a/dashboard.js
++++ b/dashboard.js
+@@ -48,6 +48,14 @@ function renderHolders(snapshot) {
+   document.getElementById("holderCoverageNote").textContent = available ?
+     (data.renderedLimitReached ? "Rendered-row safety limit reached" : "Virtualized list · No overall Bundler % calculated") : status;
+ 
++  const currencies = new Set((data?.rows ?? []).map(holder => holder.balanceCurrency).filter(Boolean));
++  const balanceCurrency = data?.balanceCurrency || (currencies.size === 1 ? [...currencies][0] : null);
++  document.getElementById("holderBalanceHeader").textContent = balanceCurrency ? `${balanceCurrency} balance` : "Native balance";
++  const showFees = Boolean(data?.hasFeesPaid || data?.rows?.some(holder => holder.feesPaid != null));
++  document.getElementById("holderFeesHeader").hidden = !showFees;
++  const amountText = (amount, unit) => amount == null ? null :
++    unit && !String(amount).includes(unit) ? `${amount} ${unit}` : amount;
++
+   const body = document.getElementById("holderRows");
+   const fragment = document.createDocumentFragment();
+   for (const holder of data?.rows ?? []) {
+@@ -56,7 +64,8 @@ function renderHolders(snapshot) {
+     const wallet = cell(holder.walletDisplay, "wallet-cell");
+     secondary(wallet, holder.walletAddress || "Identity unresolved", holder.walletAddress ? "cell-secondary wallet-address" : "cell-secondary unresolved");
+     row.appendChild(wallet);
+-    row.appendChild(cell(holder.solBalance));
++    const balance = Object.hasOwn(holder, "nativeBalance") ? holder.nativeBalance : holder.solBalance;
++    row.appendChild(cell(amountText(balance, holder.balanceCurrency)));
+     row.appendChild(cell(holder.lastActive));
+     const bought = cell(holder.boughtAmount);
+     secondary(bought, holder.buyCount === null ? "Buys: unavailable" : `${holder.buyCount} buys`);
+@@ -65,6 +74,7 @@ function renderHolders(snapshot) {
+     secondary(sold, holder.sellCount === null ? "Sells: unavailable" : `${holder.sellCount} sells`);
+     row.appendChild(sold);
+     row.appendChild(cell(holder.unrealizedPnl));
++    if (showFees) row.appendChild(cell(amountText(holder.feesPaid, holder.feesPaidCurrency)));
+     const remaining = cell(holder.remainingTokenValue);
+     secondary(remaining, holder.remainingPercentage ?? "% unavailable");
+     row.appendChild(remaining);
+@@ -94,7 +104,7 @@ function renderHolders(snapshot) {
+   if (!fragment.childNodes.length) {
+     const row = document.createElement("tr");
+     const empty = cell(status, "empty-holders");
+-    empty.colSpan = 11;
++    empty.colSpan = showFees ? 12 : 11;
+     row.appendChild(empty);
+     fragment.appendChild(row);
+   }
+diff --git a/holderTableExtractor.js b/holderTableExtractor.js
+index e9f68dc..aead6e2 100644
+--- a/holderTableExtractor.js
++++ b/holderTableExtractor.js
+@@ -5,7 +5,22 @@
+   const MAX_RENDERED_ROWS = 500;
+   const MAX_SESSION_WALLETS = 1000;
+   const clean = text => (text ?? "").replace(/\s+/g, " ").trim();
+-  const value = node => clean(node?.innerText || node?.textContent) || null;
++  function value(node) {
++    // Preserve zero-count subscripts without converting displayed amounts to floats.
++    const text = current => {
++      if (current.nodeType === 3) return current.textContent;
++      if (current.nodeType !== 1 || current.matches('svg, img, [aria-label="Label this wallet"]')) return "";
++      if ((current.tagName === "SUB" || current.style.verticalAlign === "sub" || current.classList.contains("align-sub")) &&
++          /^\d{1,3}$/.test(clean(current.textContent))) {
++        return clean(current.textContent).replace(/\d/g, digit => "₀₁₂₃₄₅₆₇₈₉"[Number(digit)]);
++      }
++      return Array.from(current.childNodes).map(text).join("");
++    };
++    return clean(node ? text(node) : "").replace(/0\.0([₀₁₂₃₄₅₆₇₈₉]+)(\d+)/g, (raw, subscript, digits) => {
++      const zeros = Number([...subscript].map(char => "₀₁₂₃₄₅₆₇₈₉".indexOf(char)).join(""));
++      return zeros >= 1 && zeros <= 308 ? "0." + "0".repeat(zeros) + digits : raw;
++    }) || null;
++  }
+   const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+   function isAddress(text) {
+     if (/^0x[\da-fA-F]{40}$/.test(text || "")) return true;
+@@ -21,11 +36,10 @@
+ 
+   function fragments(cell) {
+     if (!cell) return [];
+-    const lines = (cell.innerText || "").split(/\n+/).map(clean).filter(Boolean);
+-    if (lines.length > 1) return lines;
+     // Inline wrappers often carry an amount and a secondary count/percentage.
+     const leaves = Array.from(cell.querySelectorAll("span, div, a, time"))
+-      .filter(node => !node.children.length).map(value).filter(Boolean);
++      .filter(node => !node.querySelector("span, div, a, time") && !node.closest('[aria-label="Label this wallet"]'))
++      .map(value).filter(Boolean);
+     return leaves.length ? leaves : [value(cell)].filter(Boolean);
+   }
+ 
+@@ -68,7 +82,13 @@
+   function trade(cell, side) {
+     const parts = fragments(cell);
+     const countMatch = parts.join(" ").match(new RegExp(`(?:([\\d,]+)\\s*(?:${side}s?|txns?|transactions?)\\b|\\b${side}s?\\s*[:：]\\s*([\\d,]+))`, "i"));
+-    const rawCount = explicit(cell, `${side}-count`) || countMatch?.[1] || countMatch?.[2];
++    // Axiom's Bought/Sold cells display token quantity / transaction count.
++    // Match that complete secondary line, never an arbitrary number or wallet badge.
++    const ratioCounts = new Set(Array.from(cell?.querySelectorAll("span, div") ?? [])
++      .map(node => value(node)?.match(/^(?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)[KMBT]?\s*\/\s*([\d,]+)$/i)?.[1])
++      .filter(Boolean));
++    const rawCount = explicit(cell, `${side}-count`) || countMatch?.[1] || countMatch?.[2] ||
++      (ratioCounts.size === 1 ? [...ratioCounts][0] : null);
+     const count = rawCount && /^[\d,]+$/.test(rawCount) ? Number(rawCount.replace(/,/g, "")) : null;
+     return {
+       amount: explicit(cell, `${side}-amount`) || parts.find(part => !/\b(?:buys?|sells?|txns?|transactions?)\b/i.test(part)) || null,
+@@ -76,46 +96,117 @@
+     };
+   }
+ 
+-  function rowCells(row) {
+-    const roleCells = Array.from(row.querySelectorAll('[role="cell"], [role="gridcell"]'));
+-    if (roleCells.length === 9) return roleCells;
++  const LEGACY_FIELDS = ["rank", "wallet", "balance", "bought", "sold", "pnl", "remaining", "funding", "held"];
++  const isActionCell = cell => cell.classList.contains("h-0") && cell.classList.contains("w-0") &&
++    Boolean(cell.querySelector("button")) && /^Follow (?:Buy|Sell)$/i.test(value(cell) || "");
++  function headerField(cell) {
++    const label = value(cell) || "";
++    if (!label || /^(?:Rank|#)$/i.test(label)) return "rank";
++    if (/^Wallet$/i.test(label)) return "wallet";
++    if (/^(?:(?:SOL|BNB|ETH)\s+)?Balance(?:\s|$)/i.test(label)) return "balance";
++    if (/^Bought(?:\s|$)/i.test(label)) return "bought";
++    if (/^Sold(?:\s|$)/i.test(label)) return "sold";
++    if (/^U\.?\s*PnL$/i.test(label)) return "pnl";
++    if (/^Fees Paid$/i.test(label)) return "fees";
++    if (/^Remaining$/i.test(label)) return "remaining";
++    if (/^Funding$/i.test(label)) return "funding";
++    if (/^Held$/i.test(label)) return "held";
++    return null;
++  }
++  function headerSchema(table) {
++    // Stay inside the Holders table; headers may be divs rather than an ARIA grid.
++    let recognizedHeader = false;
++    for (const label of table.querySelectorAll("span, [role='columnheader'], th")) {
++      if (value(label) !== "Wallet" || label.closest('[data-index]') ||
++          (label.closest('[role="row"]') && !label.closest('[role="columnheader"]') && label.tagName !== "TH")) continue;
++      let container = label.parentElement;
++      for (let depth = 0; depth < 4 && container && table.contains(container); depth++, container = container.parentElement) {
++        const cells = Array.from(container.children).filter(cell => !isActionCell(cell));
++        if (cells.length < 9) continue;
++        const fields = cells.map(headerField);
++        if (["wallet", "balance", "bought", "sold"].every(field => fields.includes(field))) recognizedHeader = true;
++        if (!LEGACY_FIELDS.every(field => fields.filter(found => found === field).length === 1) ||
++            fields.filter(field => field === "fees").length > 1) continue;
++        const balance = cells[fields.indexOf("balance")];
++        const currency = value(balance)?.match(/^(SOL|BNB|ETH)\s+Balance/i)?.[1].toUpperCase() ?? null;
++        return {fields, currency};
++      }
++    }
++    // An incomplete/ambiguous header must not silently fall back to positional mapping.
++    return recognizedHeader ? {fields: null, currency: null} : null;
++  }
++  function rowCells(row, schema) {
++    if (schema && !schema.fields) return null;
++    let cells = Array.from(row.querySelectorAll('[role="cell"], [role="gridcell"]'));
+     let container = row;
+-    for (let depth = 0; depth < 4 && container; depth++) {
+-      const children = Array.from(container.children);
+-      if (children.length === 9) return children;
+-      if (children.length !== 1) break;
++    for (let depth = 0; !cells.length && depth < 4 && container; depth++) {
++      const children = Array.from(container.children).filter(cell => !isActionCell(cell));
++      if (children.length > 1) { cells = children; break; }
+       container = children[0];
+     }
+-    return null;
++    cells = cells.filter(cell => !isActionCell(cell));
++    let fields = schema?.fields;
++    if (!fields) {
++      if (cells.length === 9) fields = LEGACY_FIELDS;
++      // Headerless EVM captures are supported only with the observed structural markers.
++      else if (cells.length === 10 && cells[3].className.includes("--holders-bought-min-width") &&
++          cells[4].className.includes("--holders-sold-min-width") &&
++          cells[2].querySelector('img[alt="BNB"], img[alt="ETH"]') &&
++          cells[6].querySelector('img[alt="BNB"], img[alt="ETH"]') && /%/.test(value(cells[7]) || "")) {
++        fields = ["rank", "wallet", "balance", "bought", "sold", "pnl", "fees", "remaining", "funding", "held"];
++      }
++    }
++    if (!fields || fields.length !== cells.length) return null;
++    return Object.fromEntries(fields.map((field, index) => [field, cells[index]]).filter(([field]) => field));
++  }
++
++  function currency(cell) {
++    const text = value(cell) || "";
++    const symbols = new Set(Array.from(cell?.querySelectorAll('img[alt="SOL"], img[alt="BNB"], img[alt="ETH"]') ?? [])
++      .map(image => image.alt));
++    const suffix = text.match(/\b(SOL|BNB|ETH)\b/i)?.[1].toUpperCase();
++    if (suffix) symbols.add(suffix);
++    return symbols.size === 1 ? [...symbols][0] : null;
+   }
+ 
+-  function extractRow(row, cells) {
+-    const walletAddress = publicAddress(cells[1]);
+-    const bought = trade(cells[3], "buy");
+-    const sold = trade(cells[4], "sell");
+-    const remainingParts = fragments(cells[6]);
+-    const remainingPercentage = explicit(cells[6], "remaining-percentage") ||
++  function extractRow(row, cells, schema) {
++    const walletAddress = publicAddress(cells.wallet);
++    const bought = trade(cells.bought, "buy");
++    const sold = trade(cells.sold, "sell");
++    const remainingParts = fragments(cells.remaining);
++    const remainingPercentage = explicit(cells.remaining, "remaining-percentage") ||
+       remainingParts.join(" ").match(/-?\d+(?:\.\d+)?\s*%/)?.[0] || null;
+-    const activityParts = [...fragments(cells[1]), ...fragments(cells[2])];
++    const activityParts = [...fragments(cells.wallet), ...fragments(cells.balance)];
++    const balanceCurrency = currency(cells.balance) || schema?.currency ||
++      (explicit(cells.balance, "sol-balance") !== null ? "SOL" : null);
++    const nativeBalance = explicit(cells.balance, "native-balance") || explicit(cells.balance, "sol-balance") ||
++      fragments(cells.balance)[0] || null;
++    const fundingLink = cells.funding?.querySelector('a[href*="/tx/"], a[href*="/transaction/"]');
+     return {
+-      rank: value(cells[0]),
+-      walletDisplay: explicit(cells[1], "wallet") || fragments(cells[1])[0] || null,
++      rank: value(cells.rank),
++      walletDisplay: explicit(cells.wallet, "wallet") || fragments(cells.wallet)[0] || null,
+       walletAddress,
+       identityStatus: walletAddress ? "resolved" : "unresolved",
+-      solBalance: explicit(cells[2], "sol-balance") || fragments(cells[2])[0] || null,
+-      lastActive: explicit(cells[1], "last-active") || explicit(cells[2], "last-active") ||
+-        activityParts.find(part => /\b(?:last\s*active|ago|just now)\b/i.test(part) || /^\d+(?:\.\d+)?\s*[smhdw]$/.test(part)) || null,
++      nativeBalance, balanceCurrency,
++      // Retained for consumers of older Solana snapshots; EVM balances are never SOL.
++      solBalance: balanceCurrency === "SOL" ? nativeBalance : null,
++      lastActive: explicit(cells.wallet, "last-active") || explicit(cells.balance, "last-active") ||
++        activityParts.map(part => part.replace(/^\((.*)\)$/, "$1").trim())
++          .find(part => /\b(?:last\s*active|ago|just now)\b/i.test(part) || /^\d+(?:\.\d+)?\s*[smhdw]$/.test(part)) || null,
+       boughtAmount: bought.amount,
+       buyCount: bought.count,
+       soldAmount: sold.amount,
+       sellCount: sold.count,
+-      unrealizedPnl: value(cells[5]),
+-      remainingTokenValue: explicit(cells[6], "remaining-value") ||
++      unrealizedPnl: value(cells.pnl),
++      feesPaid: explicit(cells.fees, "fees-paid") || fragments(cells.fees)[0] || null,
++      feesPaidCurrency: currency(cells.fees),
++      remainingTokenValue: explicit(cells.remaining, "remaining-value") ||
+         remainingParts.find(part => !part.includes("%")) || null,
+       remainingPercentage,
+-      fundingSourceLabel: explicit(cells[7], "funding-source") || fragments(cells[7])[0] || null,
+-      fundingTransactionUrl: transactionUrl(cells[7]),
+-      holdingDuration: value(cells[8]),
++      fundingSourceLabel: explicit(cells.funding, "funding-source") || value(fundingLink?.querySelector(".truncate")) ||
++        fragments(cells.funding)[0] || null,
++      fundingTransactionUrl: transactionUrl(cells.funding),
++      holdingDuration: value(cells.held),
+       axiomBundler: Boolean(row.querySelector('img[alt="Bundler"]')),
+       classificationSource: "axiom-dom",
+       // Reserved for independently verified data; DOM labels are not cluster evidence.
+@@ -131,6 +222,7 @@
+ 
+   function extract(table) {
+     if (!table) return {rows: [], unsupportedRows: 0, renderedLimitReached: false};
++    const schema = headerSchema(table);
+     const possibleRows = Array.from(table.querySelectorAll('[style], [role="row"], [data-index]'))
+       .filter(row => {
+         const height = parseFloat(row.style.height);
+@@ -149,14 +241,17 @@
+     const rows = [];
+     let unsupportedRows = 0;
+     for (const row of candidates.slice(0, MAX_RENDERED_ROWS)) {
+-      const cells = rowCells(row);
+-      if (!cells || !/^#?\d+[.)]?$/.test(value(cells[0]) || "")) {
++      const cells = rowCells(row, schema);
++      if (!cells || !/^#?\d+[.)]?$/.test(value(cells.rank) || "")) {
+         if (row.getAttribute("role") !== "row" || !row.querySelector('[role="columnheader"]')) unsupportedRows++;
+         continue;
+       }
+-      rows.push(extractRow(row, cells));
++      rows.push(extractRow(row, cells, schema));
+     }
+-    return {rows, unsupportedRows, renderedLimitReached: candidates.length > MAX_RENDERED_ROWS};
++    const currencies = new Set(rows.map(row => row.balanceCurrency).filter(Boolean));
++    return {rows, unsupportedRows, renderedLimitReached: candidates.length > MAX_RENDERED_ROWS,
++      balanceCurrency: currencies.size === 1 ? [...currencies][0] : rows.length ? null : schema?.currency ?? null,
++      hasFeesPaid: Boolean(schema?.fields?.includes("fees") || rows.some(row => row.feesPaid !== null))};
+   }
+ 
+   function createMonitor(onChange) {
+@@ -226,6 +321,8 @@
+         cacheTruncated,
+         unsupportedRows: result.unsupportedRows,
+         renderedLimitReached: result.renderedLimitReached,
++        balanceCurrency: result.balanceCurrency ?? null,
++        hasFeesPaid: result.hasFeesPaid ?? false,
+         rows
+       };
+       const nextFingerprint = JSON.stringify(next);
+diff --git a/tests/browser-tests.js b/tests/browser-tests.js
+index 9236856..14a69d8 100644
+--- a/tests/browser-tests.js
++++ b/tests/browser-tests.js
+@@ -1,4 +1,4 @@
+-/* Real browser DOM fixtures based on the supplied nine-column, 48px row layout. */
++/* Real browser DOM fixtures based on supplied Solana and EVM Holders layouts. */
+ (async () => {
+   "use strict";
+   const results = [];
+@@ -34,6 +34,10 @@
+       <div>14m</div>
+     </div></div>`;
+   const makeTable = html => { fixture.innerHTML = `<div data-perf-id="token-table-holders">${html}</div>`; return fixture.firstElementChild; };
++  const capturedTable = async name => {
++    fixture.innerHTML = await (await fetch(`fixtures/holders-${name}.html`)).text();
++    return fixture.querySelector('[data-perf-id="token-table-holders"]');
++  };
+   let monitor;
+   try {
+     await test("Cached DOM reads remain fresh without inventing price changes, decode HTML subscripts and guard token transitions", async () => {
+@@ -93,6 +97,80 @@
+       assert(rows.length === 2 && !rows[0].axiomBundler && rows[1].axiomBundler, "Badge scope/classification");
+       assert(rows.every(row => row.identityStatus === "unresolved"), "Names are not identities");
+     });
++    await test("Captured BNB rows map Fees Paid and ignore Follow Sell controls", async () => {
++      const table = await capturedTable("bnb");
++      let clicks = 0;
++      table.addEventListener("click", () => clicks++);
++      const result = AxiomHolderTableExtractor.extract(table);
++      assert(result.rows.length === 2 && result.unsupportedRows === 0 && result.hasFeesPaid, "Captured wallet rows supported");
++      assert(result.balanceCurrency === "BNB", "Header/badge currency identified");
++      const row = result.rows[0];
++      const expected = {rank: "75", walletDisplay: "0x4efd...53be", walletAddress: null,
++        identityStatus: "unresolved", nativeBalance: "0.134", balanceCurrency: "BNB", solBalance: null,
++        lastActive: "2m", boughtAmount: "$0.566", buyCount: 22, soldAmount: "$0", sellCount: 0,
++        unrealizedPnl: "+$60.46", feesPaid: "0.0003", feesPaidCurrency: "BNB",
++        remainingTokenValue: "$61.03", remainingPercentage: "0.272%", fundingSourceLabel: "0xd878...8579",
++        holdingDuration: "51m", axiomBundler: false};
++      for (const [key, value] of Object.entries(expected)) assert(row[key] === value, `${key}: ${row[key]}`);
++      assert(row.fundingTransactionUrl?.startsWith("https://bscscan.com/tx/"), "Funding transaction retained without treating it as wallet identity");
++      assert(clicks === 0 && table.scrollTop === 0, "Extraction never clicks or scrolls");
++    });
++    await test("Captured ETH pool and wallet rows preserve tiny amounts and partial identities", async () => {
++      const result = AxiomHolderTableExtractor.extract(await capturedTable("eth"));
++      assert(result.rows.length === 3 && result.unsupportedRows === 0 && result.balanceCurrency === "ETH", "Headerless pool/wallet variants recognized conservatively");
++      const [pool, wallet, tiny] = result.rows;
++      assert(pool.walletDisplay === "UNISWAP V4 POOL" && pool.nativeBalance === "25K" && pool.feesPaid === "0", "Pool layout has no Follow Sell control");
++      assert(pool.remainingPercentage === "99.97%" && pool.fundingSourceLabel === "Uniswap V4 pool", "Pool fields do not shift");
++      assert(wallet.nativeBalance === "0.002" && wallet.lastActive === "3h" && wallet.feesPaid === "0.00001", "Balance subscripts exclude activity text");
++      assert(wallet.boughtAmount === "$0.878" && wallet.buyCount === 2 && wallet.remainingTokenValue === "$0.525", "Trade amount/count separated from average and Remaining");
++      assert(tiny.remainingTokenValue === "$0.00000000007" && tiny.remainingPercentage === "0.000000000002%", "Multi-digit zero-count subscripts decoded as displayed strings");
++      assert(result.rows.every(row => row.walletAddress === null && row.solBalance === null && !row.axiomBundler), "Abbreviations, protocol and GMGN icons do not imply identity or bundling");
++    });
++    await test("Captured Solana layout and reordered EVM headers retain named field mappings", async () => {
++      const sol = AxiomHolderTableExtractor.extract(await capturedTable("sol"));
++      assert(sol.rows.length === 2 && sol.unsupportedRows === 0 && !sol.hasFeesPaid, "Captured nine-column table preserved");
++      assert(sol.rows[0].nativeBalance === "37.64" && sol.rows[0].lastActive === "0s" && sol.rows[0].solBalance === "37.64", "Solana balance/activity preserved");
++      assert(sol.rows[1].walletDisplay === "kuryakin" && sol.rows[1].buyCount === 2 && sol.rows[1].sellCount === 1, "Wallet labels and ratio counts do not include Label control");
++      const table = await capturedTable("bnb");
++      const before = AxiomHolderTableExtractor.extract(table).rows;
++      // Swap Fees Paid and Remaining in both header and row data.
++      const containers = [table.firstElementChild, ...Array.from(table.querySelectorAll('[style]'))
++        .filter(row => row.style.position === "absolute").map(row => row.firstElementChild)];
++      for (const container of containers) {
++        const cells = Array.from(container.children).filter(cell => !cell.classList.contains("w-0"));
++        container.insertBefore(cells[7], cells[6]);
++      }
++      assert(JSON.stringify(AxiomHolderTableExtractor.extract(table).rows) === JSON.stringify(before), "Header order maps fields instead of fixed offsets");
++      const heldHeader = Array.from(table.firstElementChild.querySelectorAll("span")).find(node => node.textContent === "Held");
++      heldHeader.textContent = "Unknown duration";
++      assert(AxiomHolderTableExtractor.extract(table).unsupportedRows === 2, "An unrecognized required header never falls back to guessed offsets");
++      const unknown = makeTable(rowHtml(null, false));
++      unknown.firstElementChild.firstElementChild.appendChild(document.createElement("div"));
++      assert(AxiomHolderTableExtractor.extract(unknown).unsupportedRows === 1, "An unexplained tenth cell is rejected rather than guessed");
++    });
++    await test("ARIA headers map reordered cells and EVM fee mutations remain scoped", async () => {
++      const table = await capturedTable("bnb");
++      const header = table.firstElementChild;
++      header.setAttribute("role", "row");
++      for (const cell of header.children) cell.setAttribute("role", "columnheader");
++      const rows = Array.from(table.querySelectorAll('[style]')).filter(row => row.style.position === "absolute");
++      for (const row of rows) for (const cell of row.firstElementChild.children) {
++        if (!cell.classList.contains("w-0")) cell.setAttribute("role", "gridcell");
++      }
++      const initial = AxiomHolderTableExtractor.extract(table);
++      assert(initial.rows.length === 2 && initial.unsupportedRows === 0, "ARIA header row is not treated as a holder");
++      let changes = 0;
++      const evmMonitor = AxiomHolderTableExtractor.createMonitor(() => changes++);
++      evmMonitor.setContext("bnb-token", 1810);
++      assert(evmMonitor.getState().tableStatus === "available" && evmMonitor.getState().hasFeesPaid, "EVM layout becomes available in normal monitor flow");
++      assert(evmMonitor.getState().observedHolders === 0 && evmMonitor.getState().unresolvedRendered === 2, "Abbreviated wallets are not retained as unique identities");
++      const feeCell = rows[0].firstElementChild.children[7];
++      feeCell.querySelector("span").textContent = "0.004";
++      document.getElementById("market").textContent = "Outside change";
++      await pause(220);
++      assert(changes === 2 && evmMonitor.getState().rows[0].feesPaid === "0.004", "Fee mutation published once by scoped observer");
++      evmMonitor.disconnect();
++    });
+     await test("Monitor scopes updates, coalesces bursts, skips unchanged values", async () => {
+       makeTable(rowHtml(addressA));
+       let changes = 0;
+@@ -295,6 +373,28 @@
+       assert(!doc.querySelector(".bundler-badge") && doc.querySelector(".empty-holders"), "Mismatched token data cleared");
+       window.dispatchEvent(new Event("pagehide"));
+     });
++    await test("Dashboard displays native currencies and Fees Paid, then clears them on token switches", async () => {
++      const {doc, dispatchStorage} = dashboardFixture;
++      const table = await capturedTable("bnb");
++      const extracted = AxiomHolderTableExtractor.extract(table);
++      const snapshot = {url: "https://axiom.trade/meme/bnb-token", tokenKey: "bnb-token", capturedAt: Date.now(), stats: {},
++        holdersIntelligence: {...extracted, tokenKey: "bnb-token", tableStatus: "available", totalReported: 1810,
++          renderedHolders: 2, renderedBundlers: 0, observedHolders: 0, unresolvedRendered: 2}};
++      dispatchStorage({latestSnapshot: {newValue: snapshot}});
++      const cells = doc.getElementById("holderRows").firstElementChild.children;
++      assert(doc.getElementById("holderBalanceHeader").textContent === "BNB balance", "BNB is not mislabeled SOL");
++      assert(!doc.getElementById("holderFeesHeader").hidden && cells.length === 12, "Fees Paid column is present only for fee layouts");
++      assert(cells[2].textContent === "0.134 BNB" && cells[7].textContent === "0.0003 BNB", "Balance and fees keep their own values/currency");
++      assert(cells[8].textContent.includes("$61.03") && cells[9].textContent.includes("0xd878...8579"), "Remaining and funding do not shift");
++      const sol = AxiomHolderTableExtractor.extract(await capturedTable("sol"));
++      snapshot.holdersIntelligence = {...snapshot.holdersIntelligence, ...sol};
++      dispatchStorage({latestSnapshot: {newValue: snapshot}});
++      assert(doc.getElementById("holderBalanceHeader").textContent === "SOL balance" && doc.getElementById("holderFeesHeader").hidden, "SOL layout restores its own currency and hides fees");
++      assert(doc.getElementById("holderRows").firstElementChild.children.length === 11, "Legacy column count preserved");
++      snapshot.tokenKey = "new-token";
++      dispatchStorage({latestSnapshot: {newValue: snapshot}});
++      assert(doc.getElementById("holderBalanceHeader").textContent === "Native balance" && doc.querySelector(".empty-holders").colSpan === 11, "Old token metadata and rows cleared together");
++    });
+     await test("Token detector distinguishes mint/pool, query changes, conflicting hints and holder links", () => {
+       const pool = "AnrCHvfJUzMtos8DGjpT2XKurVPPYAVLDturASNwXcd4";
+       const mint = "CQCDTp8rsFV3PhaPeYjcCW5LdGTxi6jFx7eC3UXnpump";
+diff --git a/tests/fixtures/holders-bnb.html b/tests/fixtures/holders-bnb.html
+new file mode 100644
+index 0000000..7849fdb
+--- /dev/null
++++ b/tests/fixtures/holders-bnb.html
+@@ -0,0 +1,6 @@
++<!-- Reduced from user-provided Axiom HTML: structural wrappers, labels and displayed values retained; remote assets and presentation removed. -->
++<div data-perf-id="token-table-holders">
++<div><div><div><span><button></button></span></div></div><div><span class="truncate">Wallet</span></div><div><div class="truncate"><span class="truncate">BNB Balance  (Last Active)</span></div></div><div class="min-w-[var(--holders-bought-min-width,80px)]"><div class="truncate"><span class="truncate">Bought  (Avg Buy)</span></div></div><div class="min-w-[var(--holders-sold-min-width,80px)]"><div class="truncate"><span class="truncate">Sold  (Avg Sell)</span></div></div><div><div class="truncate"><span><span class="truncate">U. PnL</span></span></div></div><div><div class="truncate"><span><span class="truncate">Fees Paid</span></span></div></div><div><div class="truncate"><span class="truncate">Remaining</span></div></div><div><div class="truncate"><span class="truncate">Funding</span></div></div><div><div class="truncate"><span class="truncate">Held</span></div></div></div>
++<div style="position: absolute; top: 3552px; width: 100%; height: 48px;"><div><div><span>75</span></div><div><div><span><div></div></span><span><span><button aria-label="Open in BSCScan"></button></span></span><div><button><span class="group/wallet-label"><span>0x4efd...53be</span><span role="button" aria-label="Label this wallet">Label</span></span></button></div></div><div><span><div><span>22</span></div></span><span><img alt="Insider"></span><span></span></div></div><div class="h-0 w-0"><button>Follow Sell</button></div><div><div><div><img alt="BNB"><span>0.134</span><span>(<span><span>2m</span></span>)</span></div></div></div><div class="min-w-[var(--holders-bought-min-width,80px)]"><div><div class="flex-col"><div><span>$0.566</span></div><div><span><span>14.7K</span> / 22</span><span>•</span><span><span>51m</span></span></div></div><span><span>(<span>$36.6K</span>)</span></span></div></div><div class="min-w-[var(--holders-sold-min-width,80px)]"><div><div class="flex-col"><div><span><span>$0</span></span></div><div><span><span>0</span> / 0</span></div></div></div></div><div><div><div><span>+<span>$60.46</span></span></div></div></div><div><div><div><img alt="BNB"><span>0.0<sub>3</sub>3</span></div></div></div><div><div class="flex-col"><div><div><span>$61.03</span></div><div><span><span>0.272%</span></span></div></div><div><div></div></div></div></div><div><div><span><a href="https://bscscan.com/tx/0x0193635b596776c9a24fa186d0fcb2984d946e0127f2e8492461f0ac84eaaf79"><div></div><div class="flex-col"><div><div><span>51</span></div><span><span class="truncate">0xd878...8579</span></span></div><div><span>55m</span><span>•</span><div><img alt="BNB"><span>0.134</span></div><div><span>•</span><span>49</span></div></div></div></a></span></div></div><div><div><span><span>51m</span></span></div></div></div></div>
++<div style="position: absolute; top: 3600px; width: 100%; height: 48px;"><div><div><span>76</span></div><div><div><span><div></div></span><span><span><button aria-label="Open in BSCScan"></button></span></span><div><button><span class="group/wallet-label"><span>0xd987...e688</span><span role="button" aria-label="Label this wallet">Label</span></span></button></div></div><div><span><div><span>17</span></div></span><span><img alt="Insider"></span><span></span></div></div><div class="h-0 w-0"><button>Follow Sell</button></div><div><div><div><img alt="BNB"><span>0.136</span><span>(<span><span>7m</span></span>)</span></div></div></div><div class="min-w-[var(--holders-bought-min-width,80px)]"><div><div class="flex-col"><div><span>$0.406</span></div><div><span><span>9.51K</span> / 17</span><span>•</span><span><span>52m</span></span></div></div><span><span>(<span>$40.6K</span>)</span></span></div></div><div class="min-w-[var(--holders-sold-min-width,80px)]"><div><div class="flex-col"><div><span><span>$0</span></span></div><div><span><span>0</span> / 0</span></div></div></div></div><div><div><div><span>+<span>$60.46</span></span></div></div></div><div><div><div><img alt="BNB"><span>0.0<sub>3</sub>2</span></div></div></div><div><div class="flex-col"><div><div><span>$60.87</span></div><div><span><span>0.271%</span></span></div></div><div><div></div></div></div></div><div><div><span><a href="https://bscscan.com/tx/0x8afe4dfd8f962462b518f7223f6bbbe941f718d762baf0cc4f0c4c039ad932e9"><div></div><div class="flex-col"><div><div><span>51</span></div><span><span class="truncate">0xd878...8579</span></span></div><div><span>56m</span><span>•</span><div><img alt="BNB"><span>0.137</span></div><div><span>•</span><span>49</span></div></div></div></a></span></div></div><div><div><span><span>52m</span></span></div></div></div></div>
++</div>
+diff --git a/tests/fixtures/holders-eth.html b/tests/fixtures/holders-eth.html
+new file mode 100644
+index 0000000..f3218bb
+--- /dev/null
++++ b/tests/fixtures/holders-eth.html
+@@ -0,0 +1,6 @@
++<!-- Reduced from user-provided Axiom HTML: structural wrappers, labels and displayed values retained; remote assets and presentation removed. -->
++<div data-perf-id="token-table-holders">
++<div style="position: absolute; top: 0px; width: 100%; height: 48px;"><div><div><span>1</span></div><div><div><span><div></div></span><span><span><button aria-label="Open in Etherscan"></button></span></span><span>UNISWAP V4 POOL<span><img alt="Uniswap V4"></span></span></div><div></div></div><div><div><div><img alt="ETH"><span>25K</span></div></div></div><div class="min-w-[var(--holders-bought-min-width,80px)]"><div><div class="flex-col"><div><span>$0</span></div><div><span><span>0</span> / 0</span></div></div></div></div><div class="min-w-[var(--holders-sold-min-width,80px)]"><div><div class="flex-col"><div><span><span>$0</span></span></div><div><span><span>0</span> / 0</span></div></div></div></div><div><div><div><span>+<span>$2.5K</span></span></div></div></div><div><div><div><img alt="ETH"><span>0</span></div></div></div><div><div class="flex-col"><div><div><span>$2.5K</span></div><div><span><span>99.97%</span></span></div></div><div><div></div></div></div></div><div><div><span><div><img alt="Uniswap V4"><span>Uniswap V4 pool</span></div></span></div></div><div><div><span>-</span></div></div></div></div>
++<div style="position: absolute; top: 48px; width: 100%; height: 48px;"><div><div><span>2</span></div><div><div><span><div></div></span><span><span><button aria-label="Open in Etherscan"></button></span></span><div><button><span class="group/wallet-label"><span>0x7fb6...4f11</span><span role="button" aria-label="Label this wallet">Label</span></span></button></div></div><div><span><div><span>2</span></div></span><span><span role="img" aria-label="This wallet last traded through GMGN."><img alt="GMGN"></span></span></div></div><div class="h-0 w-0"><button>Follow Sell</button></div><div><div><div><img alt="ETH"><span>0.0<sub>2</sub>2</span><span>(<span><span>3h</span></span>)</span></div></div></div><div class="min-w-[var(--holders-bought-min-width,80px)]"><div><div class="flex-col"><div><span>$0.878</span></div><div><span><span>210K</span> / 2</span><span>•</span><span><span>3h</span></span></div></div><span><span>(<span>$4.18K</span>)</span></span></div></div><div class="min-w-[var(--holders-sold-min-width,80px)]"><div><div class="flex-col"><div><span><span>$0</span></span></div><div><span><span>0</span> / 0</span></div></div></div></div><div><div><div><span>-<span>$0.352</span></span></div></div></div><div><div><div><img alt="ETH"><span>0.0<sub>4</sub>1</span></div></div></div><div><div class="flex-col"><div><div><span>$0.525</span></div><div><span><span>0.021%</span></span></div></div><div><div></div></div></div></div><div><div><span><a href="https://robin.etherscan.io/tx/0xee9e4ef69ccc3ef14236d25ad1f875885301abde4c16412c2583f07246477310"><div><img alt="Relay"></div><div class="flex-col"><div><span class="truncate">Relay</span></div><div><span>3mo</span><span>•</span><div><img alt="ETH"><span>0.0<sub>2</sub>8</span></div></div></div></a></span></div></div><div><div><span><span>3h</span></span></div></div></div></div>
++<div style="position: absolute; top: 288px; width: 100%; height: 48px;"><div><div><span>7</span></div><div><div><span><div></div></span><span><span><button aria-label="Open in Etherscan"></button></span></span><div><button><span class="group/wallet-label"><span>0x450b...1969</span><span role="button" aria-label="Label this wallet">Label</span></span></button></div></div><div><span><div><span>1</span></div></span><span><span role="img" aria-label="This wallet last traded through GMGN."><img alt="GMGN"></span></span></div></div><div class="h-0 w-0"><button>Follow Sell</button></div><div><div><div><img alt="ETH"><span>0.0<sub>2</sub>3</span><span>(<span><span>3h</span></span>)</span></div></div></div><div class="min-w-[var(--holders-bought-min-width,80px)]"><div><div class="flex-col"><div><span>$0.216</span></div><div><span><span>153.5</span> / 1</span><span>•</span><span><span>3h</span></span></div></div><span><span>(<span>$1.41M</span>)</span></span></div></div><div class="min-w-[var(--holders-sold-min-width,80px)]"><div><div class="flex-col"><div><span><span>$0</span></span></div><div><span><span>0</span> / 0</span></div></div></div></div><div><div><div><span>-<span>$0.216</span></span></div></div></div><div><div><div><img alt="ETH"><span>0.0<sub>5</sub>7</span></div></div></div><div><div class="flex-col"><div><div><span>$0.0<sub>10</sub>7</span></div><div><span><span>0.0<sub>11</sub>2%</span></span></div></div><div><div></div></div></div></div><div><div><span><a href="https://robin.etherscan.io/tx/0xc5633ab29e0c143d2b400f5fb1f12b81fdfb40d3daa8cc1f2a0cf3d59e632fdc"><div></div><div class="flex-col"><div><span><span class="truncate">0x6351...0d62</span></span></div><div><span>8d</span><span>•</span><div><img alt="ETH"><span>0.0<sub>2</sub>7</span></div><div><span>•</span><span>1</span></div></div></div></a></span></div></div><div><div><span><span>3h</span></span></div></div></div></div>
++</div>
+diff --git a/tests/fixtures/holders-sol.html b/tests/fixtures/holders-sol.html
+new file mode 100644
+index 0000000..e0f18e5
+--- /dev/null
++++ b/tests/fixtures/holders-sol.html
+@@ -0,0 +1,7 @@
++<!-- Reduced from user-provided Axiom HTML: structural wrappers, labels and displayed values retained; remote assets and presentation removed. -->
++<div data-perf-id="token-table-holders">
++<div><div><div><span><button></button></span></div></div><div><span class="truncate">Wallet</span></div><div><div class="truncate"><span class="truncate">SOL Balance  (Last Active)</span></div></div><div class="min-w-[var(--holders-bought-min-width,80px)]"><div class="truncate"><span class="truncate">Bought  (Avg Buy)</span></div></div><div class="min-w-[var(--holders-sold-min-width,80px)]"><div class="truncate"><span class="truncate">Sold  (Avg Sell)</span></div></div><div><div class="truncate"><span><span class="truncate">U. PnL</span></span></div></div><div><div class="truncate"><span class="truncate">Remaining</span></div></div><div><div class="truncate"><span class="truncate">Funding</span></div></div><div><div class="truncate"><span class="truncate">Held</span></div></div></div>
++<div style="position: absolute; top: 0px; width: 100%; height: 48px;"><div><div><span>1</span></div><div><div><span><div></div></span><span><span><button aria-label="Open in Solscan"></button></span></span><span>LIQUIDITY POOL<span></span></span></div></div><div><div><div><img alt="SOL"><span>37.64</span><span>(0s)</span></div></div></div><div class="min-w-[var(--holders-bought-min-width,80px)]"><div><div class="flex-col"><div><span>$0</span></div><div><span><span>0</span> / 0</span></div></div></div></div><div class="min-w-[var(--holders-sold-min-width,80px)]"><div><div class="flex-col"><div><span>$0</span></div><div><span><span>0</span> / 0</span></div></div></div></div><div><div><div><span>+$5.93K</span></div></div></div><div><div class="flex-col"><div><div><span>$6K</span></div><div><span>40.5%</span></div></div><div><div></div></div></div></div><div><div><div><span>N/A</span></div></div></div><div><div><span><span>50m</span></span></div></div></div></div>
++<div style="position: absolute; top: 48px; width: 100%; height: 48px;"><div><div><span>2</span></div><div><div><span><div></div></span><span><span><button aria-label="Open in Solscan"></button></span></span><div><button><span class="group/wallet-label"><span><span><span><img alt="kuryakin"><span class="truncate">kuryakin</span></span></span><span><span aria-label="@_Kuryakin
++Confirmed · 2 sources" role="link"><span></span></span></span></span><span role="button" aria-label="Label this wallet">Label</span></span></button></div></div><div><span><div><span>3</span></div></span></div></div><div><div><div><img alt="SOL"><span>39.49</span><span>(10m)</span></div></div></div><div class="min-w-[var(--holders-bought-min-width,80px)]"><div><div class="flex-col"><div><span>$471.9</span></div><div><span><span>68.6M</span> / 2</span></div></div><span><span>(<span>$6.88K</span>)</span></span></div></div><div class="min-w-[var(--holders-sold-min-width,80px)]"><div><div class="flex-col"><div><span>$170.6</span></div><div><span><span>30.6M</span> / 1</span></div></div><span><span>(<span>$5.57K</span>)</span></span></div></div><div><div><div><span>+$255.3</span></div></div></div><div><div class="flex-col"><div><div><span>$563</span></div><div><span>3.8%</span></div></div><div><div></div></div></div></div><div><div><span><a href="https://solscan.io/tx/5VCYZxHykaFciwPGKeWUMUy7SVyW16qQ6qEr7kWK3LMkivMZxYGCZKrabi4h7crrNv87rGCCfSFZZByErkRQCXQq"><div><img alt="Changenow"></div><div class="flex-col"><div><div><span>2</span></div><span class="truncate">Changenow</span></div><div><span>5mo</span><span>•</span><div><img alt="SOL"><span>2.699</span></div><div><span>•</span><span>1</span></div></div></div></a></span></div></div><div><div><span><span>21m</span></span></div></div></div></div>
++</div>

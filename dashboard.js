@@ -48,6 +48,14 @@ function renderHolders(snapshot) {
   document.getElementById("holderCoverageNote").textContent = available ?
     (data.renderedLimitReached ? "Rendered-row safety limit reached" : "Virtualized list · No overall Bundler % calculated") : status;
 
+  const currencies = new Set((data?.rows ?? []).map(holder => holder.balanceCurrency).filter(Boolean));
+  const balanceCurrency = data?.balanceCurrency || (currencies.size === 1 ? [...currencies][0] : null);
+  document.getElementById("holderBalanceHeader").textContent = balanceCurrency ? `${balanceCurrency} balance` : "Native balance";
+  const showFees = Boolean(data?.hasFeesPaid || data?.rows?.some(holder => holder.feesPaid != null));
+  document.getElementById("holderFeesHeader").hidden = !showFees;
+  const amountText = (amount, unit) => amount == null ? null :
+    unit && !String(amount).includes(unit) ? `${amount} ${unit}` : amount;
+
   const body = document.getElementById("holderRows");
   const fragment = document.createDocumentFragment();
   for (const holder of data?.rows ?? []) {
@@ -56,7 +64,8 @@ function renderHolders(snapshot) {
     const wallet = cell(holder.walletDisplay, "wallet-cell");
     secondary(wallet, holder.walletAddress || "Identity unresolved", holder.walletAddress ? "cell-secondary wallet-address" : "cell-secondary unresolved");
     row.appendChild(wallet);
-    row.appendChild(cell(holder.solBalance));
+    const balance = Object.hasOwn(holder, "nativeBalance") ? holder.nativeBalance : holder.solBalance;
+    row.appendChild(cell(amountText(balance, holder.balanceCurrency)));
     row.appendChild(cell(holder.lastActive));
     const bought = cell(holder.boughtAmount);
     secondary(bought, holder.buyCount === null ? "Buys: unavailable" : `${holder.buyCount} buys`);
@@ -65,6 +74,7 @@ function renderHolders(snapshot) {
     secondary(sold, holder.sellCount === null ? "Sells: unavailable" : `${holder.sellCount} sells`);
     row.appendChild(sold);
     row.appendChild(cell(holder.unrealizedPnl));
+    if (showFees) row.appendChild(cell(amountText(holder.feesPaid, holder.feesPaidCurrency)));
     const remaining = cell(holder.remainingTokenValue);
     secondary(remaining, holder.remainingPercentage ?? "% unavailable");
     row.appendChild(remaining);
@@ -94,7 +104,7 @@ function renderHolders(snapshot) {
   if (!fragment.childNodes.length) {
     const row = document.createElement("tr");
     const empty = cell(status, "empty-holders");
-    empty.colSpan = 11;
+    empty.colSpan = showFees ? 12 : 11;
     row.appendChild(empty);
     fragment.appendChild(row);
   }

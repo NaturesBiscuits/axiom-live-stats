@@ -1,4 +1,4 @@
-/* Real browser DOM fixtures based on the supplied nine-column, 48px row layout. */
+/* Real browser DOM fixtures based on supplied Solana and EVM Holders layouts. */
 (async () => {
   "use strict";
   const results = [];
@@ -34,6 +34,10 @@
       <div>14m</div>
     </div></div>`;
   const makeTable = html => { fixture.innerHTML = `<div data-perf-id="token-table-holders">${html}</div>`; return fixture.firstElementChild; };
+  const capturedTable = async name => {
+    fixture.innerHTML = await (await fetch(`fixtures/holders-${name}.html`)).text();
+    return fixture.querySelector('[data-perf-id="token-table-holders"]');
+  };
   let monitor;
   try {
     await test("Cached DOM reads remain fresh without inventing price changes, decode HTML subscripts and guard token transitions", async () => {
@@ -92,6 +96,126 @@
       const {rows} = AxiomHolderTableExtractor.extract(makeTable(rowHtml(null, false) + rowHtml(null, true, 2)));
       assert(rows.length === 2 && !rows[0].axiomBundler && rows[1].axiomBundler, "Badge scope/classification");
       assert(rows.every(row => row.identityStatus === "unresolved"), "Names are not identities");
+    });
+    await test("Captured BNB rows map Fees Paid and ignore Follow Sell controls", async () => {
+      const table = await capturedTable("bnb");
+      let clicks = 0;
+      table.addEventListener("click", () => clicks++);
+      const result = AxiomHolderTableExtractor.extract(table);
+      assert(result.rows.length === 2 && result.unsupportedRows === 0 && result.hasFeesPaid, "Captured wallet rows supported");
+      assert(result.balanceCurrency === "BNB", "Header/badge currency identified");
+      const row = result.rows[0];
+      const expected = {rank: "75", walletDisplay: "0x4efd...53be", walletAddress: null,
+        identityStatus: "unresolved", nativeBalance: "0.134", balanceCurrency: "BNB", solBalance: null,
+        lastActive: "2m", boughtAmount: "$0.566", buyCount: 22, soldAmount: "$0", sellCount: 0,
+        unrealizedPnl: "+$60.46", feesPaid: "0.0003", feesPaidCurrency: "BNB",
+        remainingTokenValue: "$61.03", remainingPercentage: "0.272%", fundingSourceLabel: "0xd878...8579",
+        holdingDuration: "51m", axiomBundler: false};
+      for (const [key, value] of Object.entries(expected)) assert(row[key] === value, `${key}: ${row[key]}`);
+      assert(row.fundingTransactionUrl?.startsWith("https://bscscan.com/tx/"), "Funding transaction retained without treating it as wallet identity");
+      assert(clicks === 0 && table.scrollTop === 0, "Extraction never clicks or scrolls");
+    });
+    await test("Captured ETH pool and wallet rows preserve tiny amounts and partial identities", async () => {
+      const result = AxiomHolderTableExtractor.extract(await capturedTable("eth"));
+      assert(result.rows.length === 3 && result.unsupportedRows === 0 && result.balanceCurrency === "ETH", "Headerless pool/wallet variants recognized conservatively");
+      const [pool, wallet, tiny] = result.rows;
+      assert(pool.walletDisplay === "UNISWAP V4 POOL" && pool.nativeBalance === "25K" && pool.feesPaid === "0", "Pool layout has no Follow Sell control");
+      assert(pool.remainingPercentage === "99.97%" && pool.fundingSourceLabel === "Uniswap V4 pool", "Pool fields do not shift");
+      assert(wallet.nativeBalance === "0.002" && wallet.lastActive === "3h" && wallet.feesPaid === "0.00001", "Balance subscripts exclude activity text");
+      assert(wallet.boughtAmount === "$0.878" && wallet.buyCount === 2 && wallet.remainingTokenValue === "$0.525", "Trade amount/count separated from average and Remaining");
+      assert(tiny.remainingTokenValue === "$0.00000000007" && tiny.remainingPercentage === "0.000000000002%", "Multi-digit zero-count subscripts decoded as displayed strings");
+      assert(result.rows.every(row => row.walletAddress === null && row.solBalance === null && !row.axiomBundler), "Abbreviations, protocol and GMGN icons do not imply identity or bundling");
+    });
+    await test("Nested CSS subscripts preserve complete holder amounts and percentages", async () => {
+      const table = await capturedTable("eth");
+      const before = AxiomHolderTableExtractor.extract(table).rows;
+      for (const [index, sub] of [...table.querySelectorAll("sub")].entries()) {
+        const wrapper = document.createElement("span"), digits = document.createElement("span");
+        if (index % 2) wrapper.style.verticalAlign = "sub";
+        else wrapper.className = "align-sub";
+        digits.textContent = sub.textContent; wrapper.appendChild(digits); sub.replaceWith(wrapper);
+      }
+      assert(JSON.stringify(AxiomHolderTableExtractor.extract(table).rows) === JSON.stringify(before), "CSS digit wrappers must not become standalone balances, fees or Remaining fields");
+    });
+    await test("Incomplete headers reject positional fallback, and case-insensitive headers preserve reordered fields", async () => {
+      let table = await capturedTable("bnb");
+      const before = AxiomHolderTableExtractor.extract(table).rows;
+      const containers = [table.firstElementChild, ...Array.from(table.querySelectorAll('[style]'))
+        .filter(row => row.style.position === "absolute").map(row => row.firstElementChild)];
+      for (const container of containers) {
+        const cells = [...container.children].filter(cell => !cell.classList.contains("w-0"));
+        container.insertBefore(cells[9], cells[8]); // Held before Funding.
+      }
+      const walletLabel = [...table.firstElementChild.querySelectorAll("span")].find(node => node.textContent === "Wallet");
+      walletLabel.textContent = "WALLET";
+      assert(JSON.stringify(AxiomHolderTableExtractor.extract(table).rows) === JSON.stringify(before), "Uppercase header still maps Funding/Held by name");
+      table = await capturedTable("bnb");
+      const boughtLabel = [...table.firstElementChild.querySelectorAll("span")].find(node => /^Bought\b/.test(node.textContent));
+      boughtLabel.textContent = "Unknown trade column";
+      const result = AxiomHolderTableExtractor.extract(table);
+      assert(result.rows.length === 0 && result.unsupportedRows === 2, "Partially recognized header cannot be treated as a headerless EVM layout");
+      const header = table.firstElementChild;
+      for (const cell of header.children) cell.setAttribute("role", "columnheader");
+      [...header.querySelectorAll("span")].find(node => node.textContent === "Wallet").textContent = "Account";
+      assert(AxiomHolderTableExtractor.extract(table).rows.length === 0, "Explicit unsupported column headers cannot trigger positional guessing either");
+    });
+    await test("Conflicting balance currencies stay unresolved instead of inheriting the table header", async () => {
+      const table = await capturedTable("bnb");
+      const row = [...table.querySelectorAll('[style]')].find(node => node.style.position === "absolute");
+      const balance = [...row.firstElementChild.children].filter(cell => !cell.classList.contains("w-0"))[2];
+      const conflicting = document.createElement("img"); conflicting.alt = "ETH"; balance.appendChild(conflicting);
+      let holder = AxiomHolderTableExtractor.extract(table).rows[0];
+      assert(holder.balanceCurrency === null && holder.solBalance === null, "BNB/ETH badge conflict must not be guessed as BNB");
+      balance.querySelectorAll("img").forEach(image => image.remove());
+      holder = AxiomHolderTableExtractor.extract(table).rows[0];
+      assert(holder.balanceCurrency === "BNB", "A missing row unit can use an explicit BNB header");
+      balance.querySelector("span").textContent = "0.134 BNB ETH";
+      assert(AxiomHolderTableExtractor.extract(table).rows[0].balanceCurrency === null, "Multiple textual currency units are also ambiguous");
+    });
+    await test("Captured Solana layout and reordered EVM headers retain named field mappings", async () => {
+      const sol = AxiomHolderTableExtractor.extract(await capturedTable("sol"));
+      assert(sol.rows.length === 2 && sol.unsupportedRows === 0 && !sol.hasFeesPaid, "Captured nine-column table preserved");
+      assert(sol.rows[0].nativeBalance === "37.64" && sol.rows[0].lastActive === "0s" && sol.rows[0].solBalance === "37.64", "Solana balance/activity preserved");
+      assert(sol.rows[1].walletDisplay === "kuryakin" && sol.rows[1].buyCount === 2 && sol.rows[1].sellCount === 1, "Wallet labels and ratio counts do not include Label control");
+      const table = await capturedTable("bnb");
+      const before = AxiomHolderTableExtractor.extract(table).rows;
+      // Swap Fees Paid and Remaining in both header and row data.
+      const containers = [table.firstElementChild, ...Array.from(table.querySelectorAll('[style]'))
+        .filter(row => row.style.position === "absolute").map(row => row.firstElementChild)];
+      for (const container of containers) {
+        const cells = Array.from(container.children).filter(cell => !cell.classList.contains("w-0"));
+        container.insertBefore(cells[7], cells[6]);
+      }
+      assert(JSON.stringify(AxiomHolderTableExtractor.extract(table).rows) === JSON.stringify(before), "Header order maps fields instead of fixed offsets");
+      const heldHeader = Array.from(table.firstElementChild.querySelectorAll("span")).find(node => node.textContent === "Held");
+      heldHeader.textContent = "Unknown duration";
+      assert(AxiomHolderTableExtractor.extract(table).unsupportedRows === 2, "An unrecognized required header never falls back to guessed offsets");
+      const unknown = makeTable(rowHtml(null, false));
+      unknown.firstElementChild.firstElementChild.appendChild(document.createElement("div"));
+      assert(AxiomHolderTableExtractor.extract(unknown).unsupportedRows === 1, "An unexplained tenth cell is rejected rather than guessed");
+    });
+    await test("ARIA headers map reordered cells and EVM fee mutations remain scoped", async () => {
+      const table = await capturedTable("bnb");
+      const header = table.firstElementChild;
+      header.setAttribute("role", "row");
+      for (const cell of header.children) cell.setAttribute("role", "columnheader");
+      const rows = Array.from(table.querySelectorAll('[style]')).filter(row => row.style.position === "absolute");
+      for (const row of rows) for (const cell of row.firstElementChild.children) {
+        if (!cell.classList.contains("w-0")) cell.setAttribute("role", "gridcell");
+      }
+      const initial = AxiomHolderTableExtractor.extract(table);
+      assert(initial.rows.length === 2 && initial.unsupportedRows === 0, "ARIA header row is not treated as a holder");
+      let changes = 0;
+      const evmMonitor = AxiomHolderTableExtractor.createMonitor(() => changes++);
+      evmMonitor.setContext("bnb-token", 1810);
+      assert(evmMonitor.getState().tableStatus === "available" && evmMonitor.getState().hasFeesPaid, "EVM layout becomes available in normal monitor flow");
+      assert(evmMonitor.getState().observedHolders === 0 && evmMonitor.getState().unresolvedRendered === 2, "Abbreviated wallets are not retained as unique identities");
+      const feeCell = rows[0].firstElementChild.children[7];
+      feeCell.querySelector("span").textContent = "0.004";
+      document.getElementById("market").textContent = "Outside change";
+      await pause(220);
+      assert(changes === 2 && evmMonitor.getState().rows[0].feesPaid === "0.004", "Fee mutation published once by scoped observer");
+      evmMonitor.disconnect();
     });
     await test("Monitor scopes updates, coalesces bursts, skips unchanged values", async () => {
       makeTable(rowHtml(addressA));
@@ -294,6 +418,34 @@
       dispatchStorage({latestSnapshot: {newValue: snapshot}});
       assert(!doc.querySelector(".bundler-badge") && doc.querySelector(".empty-holders"), "Mismatched token data cleared");
       window.dispatchEvent(new Event("pagehide"));
+    });
+    await test("Dashboard displays native currencies and Fees Paid, then clears them on token switches", async () => {
+      const {doc, dispatchStorage} = dashboardFixture;
+      const table = await capturedTable("bnb");
+      const extracted = AxiomHolderTableExtractor.extract(table);
+      const snapshot = {url: "https://axiom.trade/meme/bnb-token", tokenKey: "bnb-token", capturedAt: Date.now(), stats: {},
+        holdersIntelligence: {...extracted, tokenKey: "bnb-token", tableStatus: "available", totalReported: 1810,
+          renderedHolders: 2, renderedBundlers: 0, observedHolders: 0, unresolvedRendered: 2}};
+      dispatchStorage({latestSnapshot: {newValue: snapshot}});
+      const cells = doc.getElementById("holderRows").firstElementChild.children;
+      assert(doc.getElementById("holderBalanceHeader").textContent === "BNB balance", "BNB is not mislabeled SOL");
+      assert(!doc.getElementById("holderFeesHeader").hidden && cells.length === 12, "Fees Paid column is present only for fee layouts");
+      assert(cells[2].textContent === "0.134 BNB" && cells[7].textContent === "0.0003 BNB", "Balance and fees keep their own values/currency");
+      assert(cells[8].textContent.includes("$61.03") && cells[9].textContent.includes("0xd878...8579"), "Remaining and funding do not shift");
+      const eth = AxiomHolderTableExtractor.extract(await capturedTable("eth"));
+      snapshot.holdersIntelligence = {...snapshot.holdersIntelligence, ...eth};
+      dispatchStorage({latestSnapshot: {newValue: snapshot}});
+      const ethCells = doc.getElementById("holderRows").children[1].children;
+      assert(doc.getElementById("holderBalanceHeader").textContent === "ETH balance" &&
+        ethCells[2].textContent === "0.002 ETH" && ethCells[7].textContent === "0.00001 ETH", "ETH balances and subscript fees display accurately");
+      const sol = AxiomHolderTableExtractor.extract(await capturedTable("sol"));
+      snapshot.holdersIntelligence = {...snapshot.holdersIntelligence, ...sol};
+      dispatchStorage({latestSnapshot: {newValue: snapshot}});
+      assert(doc.getElementById("holderBalanceHeader").textContent === "SOL balance" && doc.getElementById("holderFeesHeader").hidden, "SOL layout restores its own currency and hides fees");
+      assert(doc.getElementById("holderRows").firstElementChild.children.length === 11, "Legacy column count preserved");
+      snapshot.tokenKey = "new-token";
+      dispatchStorage({latestSnapshot: {newValue: snapshot}});
+      assert(doc.getElementById("holderBalanceHeader").textContent === "Native balance" && doc.querySelector(".empty-holders").colSpan === 11, "Old token metadata and rows cleared together");
     });
     await test("Token detector distinguishes mint/pool, query changes, conflicting hints and holder links", () => {
       const pool = "AnrCHvfJUzMtos8DGjpT2XKurVPPYAVLDturASNwXcd4";
