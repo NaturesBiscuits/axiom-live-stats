@@ -167,9 +167,16 @@
     if (!marketSnapshot || tokenPending || marketSnapshot.chartContext.routeKey !== AxiomTokenContextDetector.routeKey()) {
       schedule(); return;
     }
+    const started = performance.now();
     liveValues.readLatest();
+    const domReadDurationMs = performance.now() - started;
     const packet = rolling.tick(Date.now(), document.hidden);
     if (!packet) return;
+    const collectorDurationMs = performance.now() - started;
+    for (const series of Object.values(packet.series)) for (const row of series.samples) if (!row.gap) {
+      row.domReadDurationMs = domReadDurationMs;
+      row.collectorDurationMs = collectorDurationMs;
+    }
     try {
       chrome.runtime.sendMessage({type: "AXIOM_DOM_CHART_UPDATE", packet}, () => { void chrome.runtime.lastError; });
     } catch { /* Extension was reloaded; no synthetic observations are created. */ }

@@ -8,6 +8,11 @@
   const renderer = AxiomChartView.createRenderer(node("rollingChart"), (timestamp, sample) => {
     node("chartCursor").textContent = `${new Date(timestamp * 1000).toISOString()} · ${sample ? sample.value === null ?
       sample.reason : `${AxiomChartView.exact(sample.value)} ${sample.unit} · read ${sample.domReadAt ?? sample.observedAt} · changed ${sample.valueChangedAt ?? "unknown"}` : "No observation recorded"}`;
+  }, following => {
+    const live = following && node("chartView").value === "live";
+    node("chartFollow").textContent = live ? "Following live" : "Follow live";
+    node("chartFollow").setAttribute("aria-pressed", String(live));
+    node("chartNavigation").textContent = following ? live ? "Following selected period" : "Recorded period" : "Navigation paused · collection continues";
   });
   const cacheKey = (token, metric) => JSON.stringify([token, metric]);
   const timeText = time => Number.isFinite(time) ? new Date(time).toISOString().replace("T", " ") : "—";
@@ -51,6 +56,16 @@
       currentSeries = view.get(context.sourceKey, currentEnd * 1000)?.series[type] ?? null;
     }
     const samples = currentSeries?.samples ?? [], latest = samples.at(-1);
+    const seconds = Number(node("chartRange").value);
+    const selected = samples.filter(row => row.timestamp > currentEnd - seconds && Number.isFinite(row.value) && !row.gap && !row.stale);
+    const first = selected[0], last = selected.at(-1);
+    node("chartCurrent").textContent = last ? `${AxiomChartView.exact(last.value)} ${unit}` : "Unavailable";
+    node("chartCurrentNote").textContent = last ? `Observed ${timeText(last.timestamp * 1000)} UTC` : "No usable observation in this period";
+    const change = selected.length > 1 && first.value > 0 ? (last.value / first.value - 1) * 100 : null;
+    node("chartChange").textContent = Number.isFinite(change) ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}%` : "Unavailable";
+    node("chartChange").classList.toggle("positive", change > 0);
+    node("chartChange").classList.toggle("negative", change < 0);
+    node("chartChangeNote").textContent = `First to last usable observation within ${seconds / 60}m · ${selected.length} points`;
     const deliveryAge = history?.lastReceivedAt ? now - history.lastReceivedAt : null;
     const readAge = latest?.domReadAt ? now - latest.domReadAt : latest?.observedAt ? now - latest.observedAt : null;
     const recorded = node("chartView").value === "recorded";
@@ -69,6 +84,8 @@
     node("chartWindow").textContent = `${timeText((currentEnd - 899) * 1000)} to ${timeText(currentEnd * 1000)}${node("chartView").value === "recorded" ? " · recorded period" : " · live view"}`;
     const delay = Math.max(latest?.samplingDelayMs ?? 0, connected ? 0 : Math.max(0, (deliveryAge ?? 1000) - 1000));
     node("chartDelay").textContent = latest ? `${Math.round(delay).toLocaleString()} ms · delivery ${Math.round(latest.deliveryDelayMs ?? 0)} ms` : "—";
+    node("chartCallback").textContent = Number.isFinite(latest?.collectorDurationMs) && Number.isFinite(latest?.domReadDurationMs) ?
+      `${latest.collectorDurationMs.toFixed(1)} ms total · DOM read ${latest.domReadDurationMs.toFixed(1)} ms · source ${latest.sourceHidden ? "hidden" : "visible"}` : "Unavailable for older samples";
     node("chartSource").textContent = recorded ? samples.length ? "Saved observations" : "No recorded observations" : connected ? readable ? "DOM readable" : "Connected · value unavailable" :
       saved?.samples.length || history?.restored ? "Saved observations" : history ? "Source delayed" : "Waiting";
     node("chartSource").classList.toggle("negative", !connected && Boolean(samples.length));
@@ -82,7 +99,7 @@
     node("chartExportCSV").disabled = !samples.length;
     renderer.render(samples, currentEnd, JSON.stringify([context?.sourceKey, type, unit, node("chartView").value]));
   }
-  function hydrate() {
+  function hydrate(allowRecordedFallback = true) {
     const context = snapshot?.chartContext, type = node("chartMetric").value;
     const requestId = ++hydrationId;
     try {
@@ -98,7 +115,7 @@
           savedSeries.delete(key);
           if (response.recorded.samples.length) savedSeries.set(key, response.recorded);
           while (savedSeries.size > 8) savedSeries.delete(savedSeries.keys().next().value);
-          if (response.recorded.samples.length && (node("chartView").value === "live" || automaticallySaved) &&
+          if (allowRecordedFallback !== false && response.recorded.samples.length && (node("chartView").value === "live" || automaticallySaved) &&
               snapshot?.chartContext?.sourceKey === context.sourceKey && node("chartMetric").value === type &&
               response.recorded.end < Math.floor(Date.now() / 1000) - 900 && !charts.get(context.sourceKey)?.series[type]?.samples.length) {
             node("chartView").value = "recorded"; automaticallySaved = true;
@@ -118,6 +135,14 @@
     anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   node("chartMetric").addEventListener("change", () => { render(); hydrate(); });
+  node("chartRange").addEventListener("change", () => { renderer.setWindow(Number(node("chartRange").value)); render(); });
+  node("chartFit").addEventListener("click", () => renderer.fitAvailable());
+  node("chartFollow").addEventListener("click", () => {
+    if (node("chartView").value !== "live") {
+      node("chartView").value = "live"; automaticallySaved = false; render(); hydrate(false);
+    }
+    renderer.follow();
+  });
   node("chartView").addEventListener("change", () => {
     automaticallySaved = false;
     if (node("chartView").value === "recorded" && !node("chartRecordedEnd").value) {
@@ -151,6 +176,7 @@
   globalThis.AxiomChartUI = {setSnapshot(next) {
     const changed = snapshot?.chartContext?.sourceKey !== next?.chartContext?.sourceKey;
     snapshot = next;
+    globalThis.AxiomHistoricalUI?.setContext(next?.chartContext);
     if (changed) { node("chartView").value = "live"; node("chartRecordedEnd").value = ""; automaticallySaved = false; render(); hydrate(); }
   }, inspectChart: renderer.inspect};
   hydrate(); render();

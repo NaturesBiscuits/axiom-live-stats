@@ -195,7 +195,7 @@
   }
   const fields = ["timestamp", "tokenKey", "blockchain", "mintAddress", "poolAddress", "routeAddress", "valueType", "unit",
     "value", "source", "sourceFreshness", "observedAt", "domReadAt", "valueChangedAt", "domUpdatedAt", "sampledAt", "deliveredAt",
-    "sourceAgeMs", "samplingDelayMs", "deliveryDelayMs", "displayText", "readReason", "sourceHidden", "stale", "gap", "reason"];
+    "sourceAgeMs", "samplingDelayMs", "deliveryDelayMs", "domReadDurationMs", "collectorDurationMs", "displayText", "readReason", "sourceHidden", "stale", "gap", "reason"];
   function records(series) { return (series?.samples ?? []).map(row => ({...row, ...row.tokenIdentity, tokenIdentity: undefined})); }
   function toJSONL(series) { return records(series).map(row => JSON.stringify(row)).join("\n"); }
   function toCSV(series) {

@@ -18,7 +18,7 @@ Global Fees Paid, Price, Liquidity, Supply, ATH, 5m Volume, Buys, Sells, Net Vol
 
 ## Test changes
 
-After changing extension files, click **Reload** on `chrome://extensions`, then refresh the Axiom page and dashboard. Version 0.6 uses only the Axiom host permission. The manifest injects the holder extractor, token detector, rolling chart store and cached live-value reader before `content.js`.
+After changing extension files, click **Reload** on `chrome://extensions`, then refresh the Axiom page and dashboard. Axiom is the only required host permission; loading optional historical candles requests GeckoTerminal access. The manifest injects the holder extractor, token detector, rolling chart store and cached live-value reader before `content.js`.
 
 ## Common issues
 
@@ -128,11 +128,13 @@ The self-scheduling timer realigns after each execution and visibility restore. 
 
 ### Chart and recorded periods
 
-The locally bundled `lightweight-charts` 5.2.1 renderer provides an autoscaling price axis, UTC seconds and a hover crosshair. Hover text shows the full stored JavaScript numeric value; axis labels use readable significant digits rather than two-decimal price rounding. Distinct line segments preserve gaps; heavily fragmented views use isolated points. There is no CDN or chart-provider API.
+The locally bundled `lightweight-charts` 5.2.1 renderer provides an autoscaling price axis, UTC seconds and a hover crosshair. The invisible timeline uses a separate overlay scale, so its default formatting cannot override tiny-price labels on the right scale. Hover text shows the full stored JavaScript numeric value; axis labels use readable significant digits. Distinct line segments preserve gaps; heavily fragmented views use isolated points. The rendering library loads locally, with no CDN.
 
-**Live 15-minute window** follows current time. **Recorded 15-minute window** accepts an end time in UTC to inspect retained observations. Revisiting a token with only older saved data automatically shows its last recorded period. Manual recorded selection stays in place while live collection continues. Unknown periods remain empty, and saved records never establish a live connection.
+**Live observations** follow current time. **Recorded observations** accept an end time in UTC to inspect retained observations. The initial viewport fits available data instead of stretching a few points over 15 empty minutes. **1m / 5m / 15m** selects a viewing period; **Fit available** fits usable observations inside that period. Dragging or scrolling pauses tracking while collection continues; **Follow live** returns to the current period and resumes tracking. Revisiting a token with only older saved data automatically shows its last recorded period. Unknown periods remain empty, and saved records never establish a live connection.
 
-**Reload local history** reads IndexedDB only. CSV/JSONL exports contain the selected 15-minute view, including explicit gap markers, token identity hints, metric, unit, numeric/null values, source, freshness and independent timing fields. No OHLCV fields are added.
+The summary shows the latest usable observation with its timestamp, first-to-last observed percentage change within the selected period, and source connection status. This change covers available observations, which may not span the entire period. A zero initial value makes percentage change unavailable. Collection timestamps, source identity, delay and storage controls are inside **Collection diagnostics & local storage**. New samples also record `domReadDurationMs` and `collectorDurationMs`; compare these with sampling delay and `sourceHidden` to investigate visible versus hidden tab timing. These durations measure our read/sampling work, not other page work or upstream feed latency.
+
+**Reload local history** reads IndexedDB only. DOM CSV/JSONL exports contain the full retained 15-minute window ending at the selected time, independent of chart zoom, including explicit gap markers, token identity hints, metric, unit, numeric/null values, source, freshness and independent timing fields. No OHLCV fields are added.
 
 ### Persistence and retention
 
@@ -142,13 +144,15 @@ The source continues collecting with the dashboard closed. Worker persistence us
 
 Bounds: four live tokens, two metrics each, 900 slots each; 5,000 pending disk records; eight dashboard saved windows. Archive defaults: **24 hours and 25,000 global records**. Settings offer 15 minutes/24 hours/3 days/7 days and a maximum of 100,000 records. Age and count limits apply together; the count cap can shorten retention, especially with two metrics. Reads, writes and settings changes prune expired/excess records. Existing local rolling history migrates once without creating observations.
 
-### Optional free API investigation
+### Optional historical candles
 
-Backfill remains **disabled**. The active extension has only the Axiom host permission and works entirely from recorded local observations.
+**Historical price candles** is a separate opt-in view. The required host permission remains Axiom only; `https://api.geckoterminal.com/*` is an optional permission requested when **Load 1-minute candles** is clicked. No API requests run automatically. Declining access leaves local observation collection available.
 
-On 2026-10-14, the documented GeckoTerminal public endpoint was verified without credentials. Its [public OpenAPI specification](https://api.geckoterminal.com/docs/v2/swagger.json) describes approximately 10 calls/minute, one-minute caching and minute/hour/day OHLCV. An opt-in real-pool test returned 100 one-minute candles, validating `[timestamp, open, high, low, close, volume]` and incomplete-candle identification. This does not provide supported one-second history or an exact Axiom chart match.
+Select a supported network and provide full token and pool addresses. Unambiguous DOM hints prefill these fields; unresolved values require input. The API verifies that the pool belongs to that network and contains the selected token, then requests USD price candles for its correct base/quote side. This UI never silently chooses a top pool or assumes the pool's base token. A manually selected pool may differ from Axiom's market. Token changes or form edits clear results and invalidate pending requests.
 
-`chartDataCollector.js`, `tests/chart-data.test.js` and `tests/chart-live-check.js` remain inactive investigation/reference code. The manifest, worker and dashboard do not import the API collector. Future backfill must remain optional/free and label genuine API candles separately from DOM observations.
+The separate candlestick chart offers 15m / 1h periods ending at the fetch minute, zoom/pan, reset and OHLCV CSV export. Missing minutes remain blank. Incomplete candles are marked in hover text and exports; elapsed intervals can still be revised by the provider. Results show fetch time, verified identity and USD currency. Refresh is manual, cached for one minute and paced at least 6.5 seconds between API calls; rate-limit/service-error cooldowns persist. A failed refresh keeps previous results explicitly labeled. Historical candles are never merged with DOM samples or converted into market-cap data.
+
+On 2026-10-19, `node tests/chart-live-check.js` verified public API access against a real Solana pool and validated all 100 returned one-minute candles against the raw six-field OHLCV arrays. The [public API documentation](https://api.geckoterminal.com/docs/index.html) describes approximately 10 calls/minute. This source does not provide supported one-second history or guarantee an exact Axiom chart match.
 
 ### Automated tests and rebuild
 
@@ -162,7 +166,7 @@ npm.cmd run test:storage
 
 Other shells can use `npm`. Windows `npm.cmd` avoids PowerShell execution-policy issues. Set `CHROME_PATH` if browser detection fails. Runners use their own safely removed temporary profiles. The storage runner launches two separate Chrome processes sharing only its test profile.
 
-Results on 2026-10-14: **17 unit/protocol tests, 17 browser scenarios and 14 native IndexedDB checks passed**. They cover small prices, unchanged reads vs changes, aligned slots, simulated throttling/long pauses, 900-slot bounds, token/metric/unit isolation, existing market/holder behavior, native chart gaps, exports, UTC recorded selection, deduplication, retention and browser-process restart persistence.
+Results on 2026-10-19: **28 unit/protocol tests, 27 browser scenarios and 14 native IndexedDB checks passed**. They cover tiny-price formatting, available-data fitting, paused navigation through live updates and rebuilds, unchanged reads vs changes, callback durations, aligned slots, simulated throttling/long pauses, 900-slot bounds, token/metric/unit isolation, existing market/holder behavior, native chart gaps, exports, UTC recorded selection, optional API permission denial, verified pool/candle metadata, request invalidation, retention and browser-process restart persistence.
 
 The bundle is already included. To rebuild during development:
 

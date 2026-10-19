@@ -8,6 +8,8 @@
   <script src="rollingChartCollector.js" defer></script>
   <script src="vendor/lightweight-charts.standalone.production.js" defer></script>
   <script src="chartView.js" defer></script>
+  <script src="chartDataCollector.js" defer></script>
+  <script src="historicalChart.js" defer></script>
   <script src="chartDashboard.js" defer></script>
   <script src="dashboard.js" defer></script>
 </head>
@@ -63,8 +65,25 @@
       <p class="section-note">The Bundler badge reproduces Axiom's flag; it does not independently verify transaction bundling. Unresolved wallet names, shortened addresses and ranks are never merged into session identities. Independent clustering and evidence scores are unavailable in Phase 1.</p>
     </section>
     <section class="chart-collector" aria-labelledby="chartHeading">
-      <div class="section-heading"><div><p class="eyebrow">FREE CHART V2</p><h2 id="chartHeading">Rolling 15-minute chart</h2></div><span class="source-tag">Locally recorded DOM samples</span></div>
+      <div class="section-heading"><div><p class="eyebrow">LIVE OBSERVATIONS</p><h2 id="chartHeading">Price &amp; market cap</h2></div><span class="source-tag">Locally recorded DOM samples</span></div>
       <p class="section-note">Displayed values sampled once per second, up to 900 time slots. This is DOM sampling, not exchange tick data or OHLCV. Missing and stale values create gaps; no highs, lows or trade volume are synthesized.</p>
+      <div class="chart-summary">
+        <article class="card"><div class="label">Latest observed value</div><div class="value" id="chartCurrent">Unavailable</div><p class="card-note" id="chartCurrentNote">Waiting for observations</p></article>
+        <article class="card"><div class="label">Observed change over selected period</div><div class="value" id="chartChange">Unavailable</div><p class="card-note" id="chartChangeNote">First to last usable observation</p></article>
+        <article class="card"><div class="label">Source connection</div><div class="value" id="chartSource">Waiting</div><p class="card-note">DOM readability and delivery; upstream freshness unknown</p></article>
+      </div>
+      <div class="chart-controls">
+        <label>Metric <select id="chartMetric"><option value="price">Price</option><option value="marketCap">Market cap</option></select></label>
+        <label>Period <select id="chartRange"><option value="60">1m</option><option value="300">5m</option><option value="900" selected>15m</option></select></label>
+        <button id="chartFit" type="button">Fit available</button><button id="chartFollow" type="button" aria-pressed="true">Following live</button>
+        <span id="chartNavigation" class="card-note">Following selected period</span>
+      </div>
+      <div class="chart-controls"><label for="chartView">View</label><select id="chartView"><option value="live">Live observations</option><option value="recorded">Recorded observations</option></select><label>Recorded window end (UTC) <input id="chartRecordedEnd" type="datetime-local" step="1" disabled></label></div>
+      <div class="rolling-chart-wrap"><div id="rollingChart" role="region" aria-label="Interactive line chart of DOM observations; drag to pan, scroll to zoom. Missing observations remain gaps."></div></div>
+      <p id="chartCursor" class="card-note">Move over the chart to inspect a time slot. Drag to pan or scroll to zoom; Follow live resumes tracking.</p>
+      <p id="chartMessage" class="table-status" role="status">Waiting for samples from the Axiom source page.</p>
+      <div class="chart-controls"><button id="chartRefresh" type="button">Reload local history</button><button id="chartExportJSONL" type="button" disabled>Export JSONL</button><button id="chartExportCSV" type="button" disabled>Export CSV</button></div>
+      <details class="chart-diagnostics"><summary>Collection diagnostics &amp; local storage</summary>
       <dl class="chart-identity">
         <div><dt>Blockchain · DOM hint</dt><dd id="chartNetwork">Unresolved</dd></div>
         <div><dt>Mint · DOM hint</dt><dd id="chartMint">Unresolved in DOM</dd></div>
@@ -72,23 +91,36 @@
       </dl>
       <div class="chart-summary">
         <article class="card"><div class="label">Actual sampling attempts · Up to 900</div><div class="value" id="chartCount">0</div><p class="card-note" id="chartCountNote">No samples received</p></article>
-        <article class="card"><label class="label" for="chartMetric">Displayed metric</label><select id="chartMetric"><option value="price">Price</option><option value="marketCap">Market cap</option></select><p class="card-note" id="chartUnit">Unit unavailable</p></article>
+        <article class="card"><div class="label">Displayed metric &amp; currency</div><p class="card-note" id="chartUnit">Unit unavailable</p></article>
         <article class="card"><div class="label">Sampling / delivery delay</div><div class="value" id="chartDelay">—</div><p class="card-note">Browser throttling can delay timers</p></article>
-        <article class="card"><div class="label">Source connection</div><div class="value" id="chartSource">Waiting</div><p class="card-note">DOM readability and delivery; upstream freshness unknown</p></article>
+        <article class="card"><div class="label">Sampling callback duration</div><p class="card-note" id="chartCallback">Waiting for timing measurements</p><p class="card-note">Compare visible and hidden source tabs. Timer delay is measured separately above.</p></article>
       </div>
-      <div class="chart-controls"><label for="chartView">View</label><select id="chartView"><option value="live">Live 15-minute window</option><option value="recorded">Recorded 15-minute window</option></select><label>Recorded window end (UTC) <input id="chartRecordedEnd" type="datetime-local" step="1" disabled></label></div>
       <div class="chart-times"><p>Last delivered: <span id="chartLastUpdate">—</span></p><p>Last DOM read: <span id="chartObservedAt">—</span></p><p>Last observed value change: <span id="chartChangedAt">—</span></p><p>Last sample: <span id="chartSampledAt">—</span></p></div>
       <p id="chartWindow" class="card-note"></p>
-      <div class="rolling-chart-wrap"><div id="rollingChart" role="img" aria-label="Rolling fifteen-minute line chart of DOM observations; gaps remain unobserved"></div></div>
-      <p id="chartCursor" class="card-note">Move over the chart to inspect a time slot.</p>
-      <div class="chart-controls"><button id="chartRefresh" type="button">Reload local history</button><button id="chartExportJSONL" type="button" disabled>Export JSONL</button><button id="chartExportCSV" type="button" disabled>Export CSV</button></div>
-      <p id="chartMessage" class="table-status" role="status">Waiting for samples from the Axiom source page.</p>
       <div class="chart-controls"><label>Retention <select id="chartRetention"><option value="0.25">15 minutes</option><option value="24" selected>24 hours</option><option value="72">3 days</option><option value="168">7 days</option></select></label><label>Global record limit <select id="chartRecordLimit"><option value="1000">1,000</option><option value="10000">10,000</option><option value="25000" selected>25,000</option><option value="50000">50,000</option><option value="100000">100,000</option></select></label><button id="chartSaveRetention" type="button">Save retention settings</button></div>
       <p id="chartArchiveStatus" class="card-note" role="status">Opening local IndexedDB archive…</p>
-      <p class="section-note">IndexedDB saves actual sampling attempts by token, metric, unit and timestamp. Missed slots are gap markers, not recorded observations. Persistence is batched every 15 seconds; forced shutdown can lose a pending batch. Price and market cap are never converted using supply. Only locally observed periods are available; optional API backfill is disabled.</p>
+      <p class="section-note">IndexedDB saves actual sampling attempts by token, metric, unit and timestamp. Missed slots are gap markers, not recorded observations. Persistence is batched every 15 seconds; forced shutdown can lose a pending batch. Price and market cap are never converted using supply. This chart contains only locally observed periods.</p>
+      </details>
       <p class="card-note">TradingView Lightweight Charts™ · Copyright (с) 2025 TradingView, Inc. <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a> · bundled locally, Apache-2.0.</p>
     </section>
-    <footer>Statistics, holders and the rolling chart reflect Axiom's rendered DOM. Keep the source page visible for reliable timing. Browser throttling and missing DOM updates create gaps.</footer>
+    <section class="chart-collector" aria-labelledby="historyHeading">
+      <div class="section-heading"><div><p class="eyebrow">OPTIONAL MARKET HISTORY</p><h2 id="historyHeading">Historical price candles</h2></div><span class="source-tag">GeckoTerminal · 1-minute OHLCV · USD</span></div>
+      <p class="section-note">Load market history from a verified network, token and pool. These candles are separate from local DOM observations. Confirm the pool matches the one you want to compare on Axiom; other pools can have different prices.</p>
+      <form id="historyForm" class="chart-controls">
+        <label>Network <select id="historyNetwork" required><option value="">Select network</option><option value="solana">Solana</option><option value="bsc">BNB Chain</option><option value="eth">Ethereum</option><option value="base">Base</option></select></label>
+        <label>Token address <input id="historyMint" required spellcheck="false" autocomplete="off" placeholder="Full token / mint address"></label>
+        <label>Pool address <input id="historyPool" required spellcheck="false" autocomplete="off" placeholder="Full liquidity pool address"></label>
+        <button id="historyLoad" type="submit">Load 1-minute candles</button>
+      </form>
+      <p id="historyStatus" class="table-status" role="status">Optional: loading requests access to the GeckoTerminal public API. No requests run automatically.</p>
+      <div id="historyResults" hidden>
+        <p id="historyIdentity" class="card-note"></p>
+        <div class="chart-controls"><label>Period <select id="historyRange"><option value="900">15m</option><option value="3600">1h</option></select></label><button id="historyFit" type="button">Reset view</button><button id="historyExport" type="button">Export OHLCV CSV</button></div>
+        <div class="rolling-chart-wrap"><div id="historicalChart" role="region" aria-label="Interactive one-minute USD price candles from GeckoTerminal"></div></div>
+        <p id="historyCursor" class="card-note">Hover a candle to inspect OHLCV. Empty minutes remain blank; the current candle can be incomplete.</p>
+      </div>
+    </section>
+    <footer>Statistics, holders and live observations reflect Axiom's rendered DOM. Keep the source page visible for reliable timing. Historical candles come from GeckoTerminal for the selected pool.</footer>
   </main>
 </body>
 </html>

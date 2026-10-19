@@ -9,6 +9,7 @@
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
   const test = async (name, fn) => {
+    document.getElementById("results").textContent = JSON.stringify({passed: results.length, running: name});
     await fn();
     results.push(name);
   };
@@ -349,6 +350,8 @@
       const packet = sent.filter(message => message.type === "AXIOM_DOM_CHART_UPDATE").at(-1)?.packet;
       assert(packet?.series.price.samples.at(-1).value === 0.002, "Changed numeric DOM price sampled");
       assert(packet.series.price.samples.at(-1).unit === "USD" && scans === 0, "Cached price scope, no full-document scan");
+      assert(Number.isFinite(packet.series.price.samples.at(-1).domReadDurationMs) &&
+        packet.series.price.samples.at(-1).collectorDurationMs >= packet.series.price.samples.at(-1).domReadDurationMs, "Sampler measures read and collector work separately from timer delay");
       const recent = sent.filter(message => message.type === "AXIOM_DOM_CHART_UPDATE").slice(-2)
         .map(message => message.packet.series.price.samples.at(-1));
       assert(recent.length === 2 && recent[1].timestamp - recent[0].timestamp === 1 &&
@@ -390,6 +393,8 @@
       await loadScript(doc, new URL("../rollingChartCollector.js", location.href).href);
       await loadScript(doc, new URL("../vendor/lightweight-charts.standalone.production.js", location.href).href);
       await loadScript(doc, new URL("../chartView.js", location.href).href);
+      await loadScript(doc, new URL("../chartDataCollector.js", location.href).href);
+      await loadScript(doc, new URL("../historicalChart.js", location.href).href);
       await loadScript(doc, new URL("../chartDashboard.js", location.href).href);
       await loadScript(doc, new URL("../dashboard.js", location.href).href);
       await pause(20);
@@ -475,10 +480,13 @@
       model.observe("price", {value: 2, unit: "USD"}, at);
       const packet = model.tick(at);
       runtimeListeners.forEach(listener => listener({type: "AXIOM_DOM_CHART_LIVE", packet}, {id: "fixture"}));
+      await pause(40);
       assert(doc.getElementById("chartCount").textContent === "2" && doc.getElementById("chartCountNote").textContent.includes("5 unobserved"), "Only actual attempts counted, gaps distinguished");
       assert(doc.getElementById("rollingChart").dataset.segments === "2" && doc.querySelector("#rollingChart canvas"), "Local Lightweight Charts renderer breaks gaps");
       const plotted = win.AxiomChartUI.inspectChart();
       assert(plotted.series.length === 2 && plotted.series.every(series => series.length === 1), "Separate native line series never interpolate across the gap");
+      assert(doc.getElementById("chartCurrent").textContent === "2 USD" && doc.getElementById("chartChange").textContent === "+100.00%", "Observed value and change use actual samples");
+      assert(plotted.visibleRange.to - plotted.visibleRange.from < 60, `Sparse initial observations fit available time: ${JSON.stringify(plotted.visibleRange)}`);
       assert(doc.getElementById("chartSource").textContent === "DOM readable", "Readability separated from value changes");
       assert(doc.getElementById("chartDelay").textContent.includes("5,000"), "Timer delay displayed");
       const downloads = [];
@@ -518,11 +526,23 @@
             .filter(row => row.timestamp > chosen - 900 && row.timestamp <= chosen)}});
       };
       win.AxiomChartUI.setSnapshot({url: context.routeKey, stats: {}, chartContext: context});
+      await pause(40);
       assert(doc.getElementById("chartView").value === "recorded" && doc.getElementById("chartCount").textContent === "2", "Revisited token loads its last recorded period");
       assert(doc.getElementById("chartSource").textContent === "Saved observations", "Saved data never implies a live connection");
       assert(win.AxiomChartUI.inspectChart().series[0][0].value === 0.00000000000045, "Native chart retains precise tiny price");
       const range = win.AxiomChartUI.inspectChart().visibleRange;
-      assert(range.to - range.from === 899, "Time axis spans 900 one-second slots");
+      assert(range.to - range.from <= 10, "Sparse archived samples fit their recorded period");
+      assert(win.AxiomChartUI.inspectChart().formattedPrice === "0.00000000000045", "Visible price series keeps tiny-price formatting");
+      assert(win.AxiomChartUI.inspectChart().timelineScale === "timeline", "Whitespace cannot set the right-axis formatter");
+      doc.getElementById("chartRange").value = "60";
+      doc.getElementById("chartRange").dispatchEvent(new win.Event("change"));
+      await pause(40);
+      const minute = win.AxiomChartUI.inspectChart().visibleRange;
+      assert(minute.to - minute.from === 59, "One-minute control shows 60 second slots");
+      doc.getElementById("chartRange").value = "900";
+      doc.getElementById("chartRange").dispatchEvent(new win.Event("change"));
+      await pause(40);
+      assert(win.AxiomChartUI.inspectChart().visibleRange.to - win.AxiomChartUI.inspectChart().visibleRange.from === 899, "15-minute control shows full retained window");
       // Manual history selection stays in place when a live quote in another unit arrives.
       doc.getElementById("chartView").dispatchEvent(new win.Event("change"));
       const live = AxiomRollingChart.createStore(); live.setToken(context);
@@ -537,6 +557,81 @@
       doc.getElementById("chartRecordedEnd").dispatchEvent(new win.Event("change"));
       assert(doc.getElementById("chartCount").textContent === "0" && doc.getElementById("chartExportCSV").disabled, "Unobserved selected period stays empty");
       assert(requests.at(-1).endTimestamp === end - 1800, "Recorded picker sends UTC Unix-second boundary");
+      doc.getElementById("chartFollow").click(); await pause(40);
+      assert(doc.getElementById("chartView").value === "live", "Follow live exits recorded mode even when only older archive data exists");
+      // Restore the empty archived period for the independent history isolation check below.
+      doc.getElementById("chartView").value = "recorded";
+      doc.getElementById("chartView").dispatchEvent(new win.Event("change"));
+    });
+    await test("Chart navigation stays paused through sample updates and periodic series rebuilding", async () => {
+      const {doc, win} = dashboardFixture;
+      const container = doc.createElement("div"); container.style.cssText = "width:800px;height:350px"; doc.body.append(container);
+      const renderer = win.AxiomChartView.createRenderer(container, () => {});
+      const end = Math.floor(Date.now() / 1000);
+      const samples = Array.from({length: 100}, (_, index) => ({timestamp: end - 99 + index, value: 1e-14 + index * 1e-16}));
+      renderer.render(samples, end, "navigation"); renderer.setWindow(60);
+      await pause(40);
+      container.dispatchEvent(new win.WheelEvent("wheel", {deltaY: 120, bubbles: true}));
+      assert(!renderer.inspect().following, "User zoom pauses tracking");
+      const range = renderer.inspect().visibleRange;
+      renderer.render([...samples, {timestamp: end + 61, value: 1e-14}], end + 61, "navigation");
+      await pause(40);
+      const paused = renderer.inspect().visibleRange;
+      assert(paused.from === range.from && paused.to === range.to, "Absolute view survives timeline rebuild while collection continues");
+      renderer.follow();
+      await pause(40);
+      assert(renderer.inspect().following && renderer.inspect().visibleRange.to === end + 61, "Follow resumes newest period");
+      renderer.remove(); container.remove();
+    });
+    await test("Historical candles require permission and verified identities, stay separate, and discard switched-token responses", async () => {
+      const {doc, win} = dashboardFixture;
+      const pool = "AnrCHvfJUzMtos8DGjpT2XKurVPPYAVLDturASNwXcd4", mint = "CQCDTp8rsFV3PhaPeYjcCW5LdGTxi6jFx7eC3UXnpump";
+      const quote = "So11111111111111111111111111111111111111112";
+      let permission = false, calls = 0, release;
+      win.chrome.permissions = {request: async () => permission};
+      win.chrome.storage.local = {get: async () => ({}), set: async () => {}};
+      win.fetch = async url => {
+        calls++;
+        const body = url.includes("/ohlcv/") ? {data: {attributes: {ohlcv_list: [
+          [Math.floor(Date.now() / 60000) * 60 - 60, 1e-14, 2e-14, 1e-14, 2e-14, 10]]}},
+          meta: {base: {address: url.includes("token=quote") ? quote : mint}, quote: {address: quote}}} : {data: {
+          attributes: {address: pool}, relationships: {base_token: {data: {id: "solana_" + mint}}, quote_token: {data: {id: "solana_" + quote}}}}};
+        return new win.Response(JSON.stringify(body), {status: 200});
+      };
+      // Retain real identity/normalization logic, skip rate-limit sleeping in this local fixture.
+      const original = win.AxiomChartData;
+      win.AxiomChartData = {...original, createCollector: options => original.createCollector({...options, sleep: async () => {}})};
+      const fill = () => {
+        doc.getElementById("historyNetwork").value = "solana";
+        doc.getElementById("historyMint").value = mint;
+        doc.getElementById("historyPool").value = pool;
+      };
+      const submit = () => doc.getElementById("historyForm").dispatchEvent(new win.Event("submit", {cancelable: true}));
+      const settle = async () => { for (let i = 0; i < 20 && doc.getElementById("historyLoad").disabled; i++) await pause(10); };
+      fill(); submit(); await settle();
+      assert(calls === 0 && doc.getElementById("historyStatus").textContent.includes("declined"), "Declining optional access makes no requests");
+      permission = true; submit(); await settle();
+      const history = win.AxiomHistoricalUI.inspect();
+      assert(history.candles.length === 1 && history.metadata.poolAddress === pool && history.metadata.quoteCurrency === "USD", "Verified candle mapped to selected pool and USD");
+      assert(doc.querySelector("#historicalChart canvas") && doc.getElementById("historyStatus").textContent.includes("GeckoTerminal"), "Separate labeled candlestick chart renders");
+      assert(win.AxiomChartUI.inspectChart().series.length === 0, "Market history does not fill missing DOM observations");
+      const downloads = []; win.URL.createObjectURL = blob => { downloads.push(blob); return "blob:local-test"; };
+      doc.getElementById("historyExport").click();
+      const csv = await downloads[0].text();
+      assert(csv.includes("open,high,low,close,volume,finalized") && csv.includes("GeckoTerminal Public API"), "Market export includes OHLCV provenance and interval state");
+      doc.getElementById("historyMint").value = quote;
+      doc.getElementById("historyMint").dispatchEvent(new win.Event("input"));
+      assert(doc.getElementById("historyResults").hidden, "Editing identity clears previous candles");
+      submit(); await settle();
+      assert(doc.getElementById("historyStatus").textContent.includes("does not match"), "OHLCV metadata mismatch fails closed");
+      // Changing the Axiom token while waiting for API permission must invalidate the request.
+      win.chrome.permissions.request = () => new Promise(resolve => { release = resolve; });
+      fill(); submit();
+      const before = calls;
+      win.AxiomHistoricalUI.setContext({sourceKey: "different-token", blockchain: "solana"});
+      release(true); await pause(20);
+      assert(calls === before && doc.getElementById("historyResults").hidden, "Late response cannot populate another token");
+      win.AxiomChartData = original;
     });
     assert(!scriptErrors.length, scriptErrors.join("; "));
     document.getElementById("results").textContent = JSON.stringify({passed: results.length, tests: results});
