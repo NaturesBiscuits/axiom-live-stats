@@ -8,6 +8,8 @@
   <script src="rollingChartCollector.js" defer></script>
   <script src="vendor/lightweight-charts.standalone.production.js" defer></script>
   <script src="chartView.js" defer></script>
+  <script src="liquidityHistory.js" defer></script>
+  <script src="liquidityDashboard.js" defer></script>
   <script src="chartDataCollector.js" defer></script>
   <script src="historicalChart.js" defer></script>
   <script src="chartDashboard.js" defer></script>
@@ -35,6 +37,21 @@
       <article class="card"><div class="label">Net Volume</div><div class="value" id="netVolume">—</div></article>
       <article class="card"><div class="label">Holders</div><div class="value" id="holders">—</div></article>
       <article class="card"><div class="label">Bundlers (Axiom)</div><div class="value" id="bundlers">—</div></article>
+    </section>
+    <section class="chart-collector liquidity-history" aria-labelledby="liquidityHeading">
+      <div class="section-heading"><h2 id="liquidityHeading">Liquidity history</h2><span class="source-tag">Axiom-reported liquidity</span></div>
+      <div class="liquidity-summary">
+        <article class="card"><div class="label">Current observed liquidity</div><div class="value" id="liquidityCurrent">Unavailable</div><p class="card-note" id="liquidityObservedAt">No valid observation</p></article>
+        <article class="card"><div class="label">First observed liquidity · retained recording</div><div class="value" id="liquidityFirst">Unavailable</div><p class="card-note">Change since first retained observation: <span id="liquiditySinceStart">Unavailable</span></p></article>
+        <article class="card"><div class="label">Recorded-history duration · separate from token age</div><div class="value" id="liquidityDuration">0m 0s</div><p class="card-note" id="liquidityCoverage">No attempts</p></article>
+      </div>
+      <div class="chart-controls"><label>View <select id="liquidityRange"><option value="30">30s</option><option value="60">1m</option><option value="300">5m</option><option value="900" selected>15m</option></select></label><label>Currency <select id="liquidityCurrency" aria-label="Liquidity currency"></select></label><button id="liquidityRefresh" type="button">Reload local liquidity</button></div>
+      <p class="card-note" id="liquidityChangeLabel">Observed USD liquidity changes</p>
+      <div class="liquidity-windows"><span>30s: <strong id="liquidityChange30">Collecting history</strong></span><span>1m: <strong id="liquidityChange60">Collecting history</strong></span><span>5m: <strong id="liquidityChange300">Collecting history</strong></span><span>15m: <strong id="liquidityChange900">Collecting history</strong></span></div>
+      <div class="rolling-chart-wrap"><div id="liquidityChart" role="region" aria-label="Axiom-reported liquidity sampled approximately every five seconds; missed readings break lines"></div></div>
+      <p class="card-note" id="liquidityCursor">Hover for the exact observed value, currency, original displayed text and timestamp.</p>
+      <p class="table-status" id="liquidityStatus" role="status">Waiting for source</p><p class="card-note" id="liquidityIdentity"></p>
+      <p class="section-note">Local DOM reads approximately every 5s, including new coins. Charts fit available observations and break across missing readings or delays over 7.5s. Window changes require the full recorded duration and a valid baseline within ±2.5s of the window start; they end at the latest valid observation. Coverage is valid occupied 5s slots / expected slots between the first and last retained attempts in this currency. USD liquidity changes are observed valuations, not confirmed additions/removals or a safe-to-buy guarantee. DOM readability does not verify Axiom's upstream freshness. Separate IndexedDB retention: 24 hours / 10,000 actual attempts globally, saved in 15s batches. After retention removes the beginning, summaries start at the first retained observation.</p>
     </section>
     <section class="holders-intelligence" aria-labelledby="holdersHeading">
       <div class="section-heading">

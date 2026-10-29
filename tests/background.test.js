@@ -7,37 +7,43 @@ const {runInNewContext} = require("node:vm");
 const source = readFileSync(resolve(__dirname, "../background.js"), "utf8");
 const flush = async () => { for (let index = 0; index < 4; index++) await new Promise(setImmediate); };
 
-function worker(stored = {}, localSaved = {}) {
+function worker(stored = {}, localSaved = {}, options = {}) {
   let onMessage, onClicked;
   let clock = 1700000000000;
   let timerId = 0;
   const timers = new Map();
   const created = [], updated = [], warnings = [], broadcasts = [], localWrites = [], archiveWrites = [], imports = [];
   localSaved.archiveRows ||= []; localSaved.archiveMeta ||= {};
+  localSaved.liquidityRows ||= []; localSaved.liquidityMeta ||= {};
   const Archive = require("../sampleArchive.js");
-  const fakeArchive = {
-    getMeta: async key => localSaved.archiveMeta[key],
-    setMeta: async (key, value) => { localSaved.archiveMeta[key] = value; },
-    getSettings: async () => localSaved.archiveMeta.settings || Archive.DEFAULTS,
-    setSettings: async value => (localSaved.archiveMeta.settings = Archive.settings(value)),
-    stats: async () => ({count: localSaved.archiveRows.length}),
+  const fakeArchive = (liquidity = false) => {
+    const records = liquidity ? "liquidityRows" : "archiveRows", meta = liquidity ? "liquidityMeta" : "archiveMeta";
+    return {
+    getMeta: async key => localSaved[meta][key],
+    setMeta: async (key, value) => { localSaved[meta][key] = value; },
+    getSettings: async () => localSaved[meta].settings || Archive.DEFAULTS,
+    setSettings: async value => (localSaved[meta].settings = Archive.settings(value)),
+    stats: async () => ({count: localSaved[records].length}),
     write: async rows => {
+      if (!rows.length) return;
+      if (liquidity && options.failLiquidity) throw new Error("Liquidity storage fixture failure");
       archiveWrites.push(rows);
-      const byKey = new Map(localSaved.archiveRows.map(row => [JSON.stringify([row.tokenKey,row.valueType,row.unit,row.timestamp]), row]));
+      const byKey = new Map(localSaved[records].map(row => [JSON.stringify([row.tokenKey,row.valueType,row.unit,row.timestamp]), row]));
       for (const row of rows) if (!row.gap && Number.isFinite(row.sampledAt)) byKey.set(JSON.stringify([row.tokenKey,row.valueType,row.unit,row.timestamp]), row);
-      localSaved.archiveRows = [...byKey.values()];
+      localSaved[records] = [...byKey.values()];
     },
     readLatest: async (key, metric) => {
-      const rows = localSaved.archiveRows.filter(row => row.tokenKey === key && row.valueType === metric).sort((a,b) => a.timestamp-b.timestamp);
+      const rows = localSaved[records].filter(row => row.tokenKey === key && row.valueType === metric).sort((a,b) => a.timestamp-b.timestamp);
       return {unit: rows.at(-1)?.unit, end: rows.at(-1)?.timestamp, samples: rows.slice(-900)};
     }
-  };
+  }; };
   const url = "chrome-extension://fixture/dashboard.html";
   runInNewContext(source, {console: {warn: error => warnings.push(error)}, Date: {now: () => clock},
     setTimeout(fn, ms) { const id = ++timerId; timers.set(id, {fn, at: clock + ms}); return id; },
     clearTimeout(id) { timers.delete(id); },
     importScripts(name) { imports.push(name); },
-    AxiomSampleArchive: {...Archive, createArchive: () => fakeArchive},
+    AxiomSampleArchive: {...Archive, createArchive: options => fakeArchive(options?.databaseName === "axiom-liquidity-v1")},
+    AxiomLiquidityHistory: require("../liquidityHistory.js"),
     AxiomRollingChart: {createStore: () => require("../rollingChartCollector.js").createStore({now: () => clock})}, chrome: {
     runtime: {getURL: () => url, onMessage: {addListener: callback => { onMessage = callback; }},
       sendMessage(message, callback) { broadcasts.push(message); callback?.(); }},
@@ -126,7 +132,7 @@ test("rolling chart delivery is live but persistence is batched every 15 seconds
   assert.equal(instance.localWrites.length, 0);
   assert.equal(instance.archiveWrites.length, 1);
   assert.equal(instance.localSaved.archiveRows.length, 15);
-  assert.deepEqual(instance.imports, ["rollingChartCollector.js", "sampleArchive.js"], "Only local recording modules are loaded");
+  assert.deepEqual(instance.imports, ["rollingChartCollector.js", "sampleArchive.js", "liquidityHistory.js"], "Only local recording modules are loaded");
   assert.equal(instance.stored.chartState, undefined, "No per-second chart session-storage writes");
 });
 
@@ -170,4 +176,49 @@ test("broker timestamps delivery independently and retention settings are restri
   await flush(); assert.equal(response, undefined);
   instance.send({type: "AXIOM_DOM_ARCHIVE_SETTINGS", settings: {retentionHours: 72, maxRecords: 10000}}, {url: "chrome-extension://fixture/dashboard.html"}, value => { response = value; });
   await flush(); assert.equal(response.settings.retentionHours, 72); assert.equal(response.settings.maxRecords, 10000);
+});
+
+function liquidityRow(at, context = {sourceKey: "pool-a", blockchain: "solana", mintAddress: "mint", poolAddress: "pool-a"}, text = "$5.56K") {
+  const recorder = require("../liquidityHistory.js").createRecorder({sessionId: "worker-test"});
+  recorder.setContext(context);
+  return recorder.sample(() => ({displayText: text, domReadAt: at}), at);
+}
+
+test("liquidity source validation, five-second observations and snapshot republishes remain independent", async () => {
+  const instance = worker(), first = liquidityRow(instance.now());
+  instance.send({type: "AXIOM_LIQUIDITY_UPDATE", row: first}, {tab: {id: 1}, url: "https://example.com/"});
+  instance.send({type: "AXIOM_LIQUIDITY_UPDATE", row: {...first, status: "missing", value: 0}}, chartSender);
+  await flush(); assert.equal(instance.broadcasts.length, 0);
+  instance.send({type: "AXIOM_LIQUIDITY_UPDATE", row: first}, chartSender);
+  instance.send({type: "AXIOM_STATS_UPDATE", snapshot: {stats: {liquidity: "$99M"}, capturedAt: instance.now()}}, chartSender);
+  instance.advance(5000);
+  instance.send({type: "AXIOM_LIQUIDITY_UPDATE", row: liquidityRow(instance.now())}, chartSender);
+  await flush();
+  const delivered = instance.broadcasts.filter(message => message.type === "AXIOM_LIQUIDITY_LIVE");
+  assert.equal(delivered.length, 2); assert.equal(delivered[1].row.value, first.value);
+  assert.equal(delivered[1].row.observedAt - delivered[0].row.observedAt, 5000);
+  assert.equal(instance.archiveWrites.length, 0, "No immediate per-attempt writes");
+  let reply;
+  instance.send({type: "AXIOM_LIQUIDITY_GET", tokenKey: first.tokenKey}, chartSender, value => { reply = value; });
+  await flush(); assert.equal(reply, undefined);
+  instance.send({type: "AXIOM_LIQUIDITY_GET", tokenKey: first.tokenKey}, {url: "chrome-extension://fixture/dashboard.html"}, value => { reply = value; });
+  await flush(); assert.equal(reply.live.length, 2); assert.equal(reply.saved.length, 0);
+  instance.send({type: "AXIOM_DOM_CHART_FLUSH"}, chartSender); await flush();
+  assert.equal(instance.localSaved.liquidityRows.length, 2); assert.equal(instance.localSaved.archiveRows.length, 0);
+  const restarted = worker(instance.stored, instance.localSaved);
+  restarted.send({type: "AXIOM_LIQUIDITY_GET", tokenKey: first.tokenKey}, {url: "chrome-extension://fixture/dashboard.html"}, value => { reply = value; });
+  await flush(); assert.equal(reply.live.length, 0, "Restored timestamps never imply a live source");
+  assert.equal(reply.saved.length, 2); assert.equal(reply.saved[0].observedAt, first.observedAt);
+});
+
+test("a liquidity disk failure leaves price persistence working and reports the separate storage error", async () => {
+  const instance = worker({}, {}, {failLiquidity: true});
+  instance.send({type: "AXIOM_LIQUIDITY_UPDATE", row: liquidityRow(instance.now())}, chartSender);
+  instance.send({type: "AXIOM_DOM_CHART_UPDATE", packet: packetAt(instance.now())}, chartSender);
+  await flush(); instance.send({type: "AXIOM_DOM_CHART_FLUSH"}, chartSender); await flush();
+  assert.equal(instance.localSaved.archiveRows.length, 1);
+  assert.equal(instance.localSaved.liquidityRows.length, 0);
+  assert.equal(instance.broadcasts.findLast(message => message.type === "AXIOM_DOM_ARCHIVE_STATUS").error, null);
+  const liquidity = instance.broadcasts.findLast(message => message.type === "AXIOM_LIQUIDITY_ARCHIVE_STATUS");
+  assert.match(liquidity.error, /fixture failure/); assert.equal(liquidity.pendingCount, 1);
 });

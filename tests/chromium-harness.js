@@ -40,10 +40,16 @@ async function runPage(profile, url) {
     });
     const target = await call("Target.createTarget", {url});
     const attached = await call("Target.attachToTarget", {targetId: target.targetId, flatten: true});
-    const result = await call("Runtime.evaluate", {expression: `new Promise(resolve => {
+    let result;
+    try { result = await call("Runtime.evaluate", {expression: `new Promise(resolve => {
       const check = () => document.body?.dataset.testStatus ? resolve({status: document.body.dataset.testStatus,
         result: document.getElementById('results').textContent}) : setTimeout(check, 25); check();
-    })`, awaitPromise: true, returnByValue: true}, attached.sessionId);
+    })`, awaitPromise: true, returnByValue: true}, attached.sessionId); }
+    catch (error) {
+      const state = await call("Runtime.evaluate", {expression: `JSON.stringify({url: location.href, ready: document.readyState,
+        status: document.body?.dataset.testStatus, result: document.getElementById('results')?.textContent})`, returnByValue: true}, attached.sessionId).catch(() => null);
+      throw new Error(`${error.message}; page state: ${state?.result?.value ?? "unavailable"}`);
+    }
     if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
     await call("Browser.close").catch(() => {});
     return result.result.value;

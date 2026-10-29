@@ -76,6 +76,25 @@
       assert(observations.findLast(row => row.type === "price").parsed.unit === "USD", "Full-value tooltip preserves displayed currency");
       observer.disconnect();
     });
+    await test("Liquidity reader performs bounded fresh reads, preserves displayed text and guards rapid token switches", () => {
+      fixture.innerHTML = '<div><span>Liquidity</span><span title="999999">$5.56K</span></div>';
+      let clock = Date.now();
+      const reader = AxiomLiveValueObserver.createReader(() => {}, () => clock, [["liquidity", ["liquidity"]]]);
+      const spans = [...fixture.querySelectorAll("span")];
+      reader.setToken("a"); reader.bind(spans);
+      assert(reader.readAttempt("liquidity").displayText === "$5.56K", "Original display is retained instead of a tooltip");
+      clock += 5000;
+      assert(reader.readAttempt("liquidity").domReadAt === clock, "Unchanged text receives a new actual DOM read time");
+      reader.setToken("b"); reader.bind(spans);
+      reader.setToken("c"); reader.bind(spans);
+      assert(reader.readAttempt("liquidity").status === "awaiting-token", "Rapid token changes cannot reuse old-token liquidity");
+      spans[1].textContent = "$1.2M"; reader.bind(spans);
+      assert(AxiomLiquidityHistory.parseAmount(reader.readAttempt("liquidity").displayText).value === 1200000, "New value is read directly");
+      spans[0].parentElement.hidden = true;
+      assert(reader.readAttempt("liquidity").displayText === null, "Hidden cells are unavailable");
+      spans[0].parentElement.hidden = false; spans[0].parentElement.remove();
+      assert(reader.readAttempt("liquidity").displayText === null, "Detached cached cells are unavailable");
+    });
     await test("Rendered row fields, full identity, funding URL and reserved fields", () => {
       const table = makeTable(rowHtml(addressA));
       document.getElementById("market").innerHTML = '<img alt="Bundler">';
@@ -357,6 +376,21 @@
       assert(recent.length === 2 && recent[1].timestamp - recent[0].timestamp === 1 &&
         Math.abs(recent[1].sampledAt - recent[0].sampledAt - 1000) < 200, "Visible source samples approximately once per actual second");
     });
+    await test("Liquidity collection reads cached cells at five-second cadence, independently of snapshot heartbeat timestamps", async () => {
+      const before = sent.filter(message => message.type === "AXIOM_LIQUIDITY_UPDATE");
+      assert(before.length >= 1 && before[0].row.value === 20000, "Collection starts on the first market bind");
+      let scans = 0;
+      const original = document.querySelectorAll;
+      document.querySelectorAll = function (selector) { if (selector === "span") scans++; return original.call(this, selector); };
+      await pause(5200);
+      document.querySelectorAll = original;
+      const readings = sent.filter(message => message.type === "AXIOM_LIQUIDITY_UPDATE");
+      assert(readings.length > before.length && scans === 0, "Periodic fresh liquidity reads use cached DOM bindings");
+      for (let index = 1; index < readings.length; index++) {
+        assert(readings[index].row.sampledAt - readings[index - 1].row.sampledAt >= 5000, "No one-second or duplicate snapshot observations");
+        assert(readings[index].row.value === 20000, "Valid unchanged liquidity remains recorded");
+      }
+    });
     await test("Page lifecycle disconnects observers and resumes after back/forward restore", async () => {
       window.dispatchEvent(new Event("pagehide"));
       const before = statsMessages().length;
@@ -393,6 +427,8 @@
       await loadScript(doc, new URL("../rollingChartCollector.js", location.href).href);
       await loadScript(doc, new URL("../vendor/lightweight-charts.standalone.production.js", location.href).href);
       await loadScript(doc, new URL("../chartView.js", location.href).href);
+      await loadScript(doc, new URL("../liquidityHistory.js", location.href).href);
+      await loadScript(doc, new URL("../liquidityDashboard.js", location.href).href);
       await loadScript(doc, new URL("../chartDataCollector.js", location.href).href);
       await loadScript(doc, new URL("../historicalChart.js", location.href).href);
       await loadScript(doc, new URL("../chartDashboard.js", location.href).href);
@@ -423,6 +459,34 @@
       dispatchStorage({latestSnapshot: {newValue: snapshot}});
       assert(!doc.querySelector(".bundler-badge") && doc.querySelector(".empty-holders"), "Mismatched token data cleared");
       window.dispatchEvent(new Event("pagehide"));
+    });
+    await test("Liquidity dashboard renders short saved history without a live connection, isolates currencies and breaks missed periods", () => {
+      const {doc, win, runtimeListeners} = dashboardFixture;
+      const H = win.AxiomLiquidityHistory, at = Math.floor(Date.now() / 1000) * 1000 - 30000;
+      const recorder = H.createRecorder({sessionId: "ui"});
+      recorder.setContext({sourceKey: "liquidity-ui", blockchain: "solana", mintAddress: "mint", poolAddress: "pool"});
+      const ctx = recorder.context();
+      const make = (ms, text) => recorder.sample(() => ({displayText: text, domReadAt: at + ms}), at + ms);
+      const rows = [make(0, "$5.56K"), make(5000, "$5.56K"), make(20000, "$6K"), make(25000, "2 SOL")];
+      const send = win.chrome.runtime.sendMessage;
+      win.chrome.runtime.sendMessage = (message, callback) => message.type === "AXIOM_LIQUIDITY_GET" ? callback({ok: true, saved: rows, live: []}) : send(message, callback);
+      win.AxiomLiquidityUI.setContext(ctx);
+      assert(doc.getElementById("liquidityCurrent").textContent.includes("SOL"), "Latest observed currency is explicit");
+      const selector = doc.getElementById("liquidityCurrency"); selector.value = "USD"; selector.dispatchEvent(new win.Event("change"));
+      assert(doc.getElementById("liquidityCurrent").textContent === "6,000 USD", "Readable currency values");
+      assert(doc.getElementById("liquidityFirst").textContent === "5,560 USD" && doc.getElementById("liquidityCurrent").title.includes("6000 USD"), "First and exact hover value remain available");
+      assert(doc.getElementById("liquidityChange300").textContent === "Collecting history" && doc.getElementById("liquidityChange900").textContent === "Collecting history", "Short recordings cannot claim full long-window changes");
+      const view = win.AxiomLiquidityUI.inspect();
+      assert(!view.connected && view.series.length === 2 && view.plotted.length === 3, "Saved samples never connect and the actual missed period breaks lines");
+      const live = {...rows[2], deliveredAt: Date.now()};
+      runtimeListeners.forEach(listener => listener({type: "AXIOM_LIQUIDITY_LIVE", row: live}, {id: "fixture"}));
+      assert(win.AxiomLiquidityUI.inspect().connected, "Actual worker delivery establishes recent source status");
+      doc.getElementById("liquidityRange").value = "30"; doc.getElementById("liquidityRange").dispatchEvent(new win.Event("change"));
+      assert(win.AxiomLiquidityUI.inspect().plotted.length === 3, "30-second view fits actual short history");
+      win.AxiomLiquidityUI.setContext({...ctx, tokenKey: "different-pool"});
+      win.chrome.runtime.sendMessage = send;
+      win.AxiomLiquidityUI.setContext(null);
+      assert(doc.getElementById("liquidityCurrent").textContent === "Unavailable", "Identity switch clears old liquidity");
     });
     await test("Dashboard displays native currencies and Fees Paid, then clears them on token switches", async () => {
       const {doc, dispatchStorage} = dashboardFixture;

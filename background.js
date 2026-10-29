@@ -3,9 +3,17 @@
 "use strict";
 importScripts("rollingChartCollector.js");
 importScripts("sampleArchive.js");
+importScripts("liquidityHistory.js");
 let opening = null;
 const rollingCharts = AxiomRollingChart.createStore();
 const archive = AxiomSampleArchive.createArchive();
+const liquidityArchive = AxiomSampleArchive.createArchive({databaseName: "axiom-liquidity-v1",
+  valueTypes: ["liquidity"], source: AxiomLiquidityHistory.SOURCE, maxTokenKeyLength: 4096,
+  defaults: {retentionHours: AxiomLiquidityHistory.RETENTION_HOURS, maxRecords: AxiomLiquidityHistory.MAX_RECORDS},
+  validateRow: AxiomLiquidityHistory.isAttempt});
+const liquidityRows = new Map();
+let liquidityError = null;
+const liquidityLoaded = liquidityArchive.getSettings().catch(error => { liquidityError = error.message; });
 let archiveError = null;
 let archiveConfig = {...AxiomSampleArchive.DEFAULTS};
 let archiveStats = {count: 0};
@@ -40,10 +48,22 @@ function flushCharts() {
     chartDirty = false;
     try {
       const batch = [...pendingRecords.values()];
-      await archive.write(batch);
-      for (const row of batch) if (pendingRecords.get(recordKey(row)) === row) pendingRecords.delete(recordKey(row));
-      archiveError = null; archiveStats = await archive.stats();
+      const batches = [batch.filter(row => row.valueType !== "liquidity"), batch.filter(row => row.valueType === "liquidity")];
+      const results = await Promise.allSettled(batches.map((rows, index) => rows.length ?
+        (index ? liquidityArchive : archive).write(rows) : Promise.resolve()));
+      for (const [index, result] of results.entries()) {
+        if (result.status === "fulfilled") {
+          for (const row of batches[index]) if (pendingRecords.get(recordKey(row)) === row) pendingRecords.delete(recordKey(row));
+        }
+        if (batches[index].length) {
+          const error = result.status === "rejected" ? result.reason.message : null;
+          if (index) liquidityError = error; else archiveError = error;
+        }
+      }
+      archiveStats = await archive.stats();
+      chartDirty = pendingRecords.size > 0;
       broadcastArchiveStatus();
+      if (chartDirty) schedulePersistence();
     } catch (error) {
       chartDirty = true;
       archiveError = error.message; broadcastArchiveStatus();
@@ -54,7 +74,43 @@ function flushCharts() {
   return persistence;
 }
 
+function trimLiquidityRows(at = Date.now()) {
+  const retained = new Set([...liquidityRows.values()].flat().filter(row => row.sampledAt >= at - 86400000)
+    .sort((a, b) => b.sampledAt - a.sampledAt).slice(0, AxiomLiquidityHistory.MAX_RECORDS));
+  for (const [key, rows] of liquidityRows) {
+    const kept = rows.filter(row => retained.has(row));
+    if (kept.length) liquidityRows.set(key, kept); else liquidityRows.delete(key);
+  }
+}
+
+function receiveLiquidity(row, sender) {
+  chartQueue = chartQueue.catch(() => {}).then(async () => {
+    await liquidityLoaded;
+    const receivedAt = Date.now();
+    if (!AxiomLiquidityHistory.isAttempt(row, receivedAt)) return;
+    const delivered = {...row, deliveredAt: receivedAt, sourceTabId: sender.tab.id};
+    const key = recordKey(row), old = pendingRecords.get(key);
+    if (old && old.sampledAt > row.sampledAt) return;
+    const group = AxiomLiquidityHistory.seriesKey(row);
+    const previous = liquidityRows.get(group);
+    liquidityRows.delete(group);
+    liquidityRows.set(group, AxiomLiquidityHistory.mergeRows(previous, [delivered])
+      .filter(item => item.sampledAt >= receivedAt - 86400000).slice(-AxiomLiquidityHistory.MAX_RECORDS));
+    while (liquidityRows.size > AxiomLiquidityHistory.MAX_SERIES) liquidityRows.delete(liquidityRows.keys().next().value);
+    trimLiquidityRows(receivedAt);
+    pendingRecords.set(key, delivered);
+    while (pendingRecords.size > 5000) { pendingRecords.delete(pendingRecords.keys().next().value); droppedRecords++; }
+    chartDirty = true; schedulePersistence();
+    try { chrome.runtime.sendMessage({type: "AXIOM_LIQUIDITY_LIVE", row: delivered}, () => { void chrome.runtime.lastError; }); }
+    catch { /* The dashboard may be closed; collection and persistence continue. */ }
+  }).catch(error => { liquidityError = error.message; });
+}
+
 function broadcastArchiveStatus() {
+  try { chrome.runtime.sendMessage({type: "AXIOM_LIQUIDITY_ARCHIVE_STATUS", error: liquidityError,
+    pendingCount: [...pendingRecords.values()].filter(row => row.valueType === "liquidity").length,
+    droppedRecords}, () => { void chrome.runtime.lastError; }); }
+  catch { /* No open dashboard. */ }
   try { chrome.runtime.sendMessage({type: "AXIOM_DOM_ARCHIVE_STATUS", error: archiveError,
     stats: archiveStats, settings: archiveConfig, pendingCount: pendingRecords.size, droppedRecords}, () => { void chrome.runtime.lastError; }); }
   catch { /* No open dashboard. */ }
@@ -117,6 +173,22 @@ async function ensureDashboard(activate = false) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "AXIOM_LIQUIDITY_GET") {
+    if (sender.url !== chrome.runtime.getURL("dashboard.html") || typeof message.tokenKey !== "string") return;
+    void Promise.all([liquidityLoaded, chartQueue, persistence]).then(async () => {
+      let saved = [];
+      try {
+        saved = (await liquidityArchive.readLatest(message.tokenKey, "liquidity", null,
+          {windowSeconds: 86400, maxRows: AxiomLiquidityHistory.MAX_RECORDS, allUnits: true})).samples;
+        liquidityError = null;
+      } catch (error) { liquidityError = error.message; }
+      trimLiquidityRows();
+      const live = [...liquidityRows.values()].flat().filter(row => row.tokenKey === message.tokenKey);
+      sendResponse({ok: true, saved, live, error: liquidityError,
+        retentionHours: AxiomLiquidityHistory.RETENTION_HOURS, maxRecords: AxiomLiquidityHistory.MAX_RECORDS});
+    }).catch(error => sendResponse({ok: false, error: error.message}));
+    return true;
+  }
   if (message?.type === "AXIOM_DOM_CHART_GET") {
     if (sender.url !== chrome.runtime.getURL("dashboard.html")) return;
     void Promise.all([chartLoaded, chartQueue]).then(async () => {
@@ -140,9 +212,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }).catch(error => sendResponse({ok: false, error: error.message}));
     return true;
   }
-  if (["AXIOM_DOM_CHART_UPDATE", "AXIOM_DOM_CHART_FLUSH"].includes(message?.type)) {
+  if (["AXIOM_DOM_CHART_UPDATE", "AXIOM_DOM_CHART_FLUSH", "AXIOM_LIQUIDITY_UPDATE"].includes(message?.type)) {
     if (typeof sender.tab?.id !== "number" || !sender.url?.startsWith("https://axiom.trade/")) return;
     if (message.type === "AXIOM_DOM_CHART_UPDATE") receiveSamples(message.packet, sender);
+    else if (message.type === "AXIOM_LIQUIDITY_UPDATE") receiveLiquidity(message.row, sender);
     else void chartQueue.then(flushCharts).catch(console.warn);
     return;
   }

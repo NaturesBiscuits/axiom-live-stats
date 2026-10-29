@@ -7,7 +7,9 @@
       maxRecords: Number.isInteger(Number(value.maxRecords)) ? Math.min(100000, Math.max(1000, Number(value.maxRecords))) : DEFAULTS.maxRecords};
   }
   function createArchive({databaseName = "axiom-free-chart-v2", indexedDB = globalThis.indexedDB,
-    keyRange = globalThis.IDBKeyRange, now = Date.now} = {}) {
+    keyRange = globalThis.IDBKeyRange, now = Date.now, valueTypes = ["price", "marketCap"],
+    source = "axiom-dom-sample", defaults = DEFAULTS, maxTokenKeyLength = 2048, validateRow = () => true} = {}) {
+    const configFor = value => settings({...defaults, ...value});
     let opening = null;
     let handle = null;
     const request = req => new Promise((resolve, reject) => {
@@ -47,7 +49,7 @@
       tx.objectStore("meta").put({key, value}); await done;
     }
     async function prune() {
-      const config = settings(await getMeta("settings"));
+      const config = configFor(await getMeta("settings"));
       const db = await open(), tx = db.transaction("samples", "readwrite"), done = completed(tx);
       const store = tx.objectStore("samples"), cutoff = Math.floor(now() / 1000 - config.retentionHours * 3600);
       const expired = store.index("timestamp").openCursor(keyRange.upperBound(cutoff, true));
@@ -67,12 +69,12 @@
     }
     return {
       open, getMeta, setMeta,
-      getSettings: async () => settings(await getMeta("settings")),
+      getSettings: async () => configFor(await getMeta("settings")),
       async setSettings(value) { const config = settings(value); await setMeta("settings", config); await prune(); return config; },
       async write(rows) {
         const valid = rows.filter(row => row && !row.gap && Number.isFinite(row.sampledAt) &&
-          typeof row.tokenKey === "string" && row.tokenKey.length <= 2048 && ["price", "marketCap"].includes(row.valueType) &&
-          typeof row.unit === "string" && row.unit.length <= 24 && row.source === "axiom-dom-sample" &&
+          typeof row.tokenKey === "string" && row.tokenKey.length <= maxTokenKeyLength && valueTypes.includes(row.valueType) &&
+          typeof row.unit === "string" && row.unit.length <= 24 && row.source === source && validateRow(row, now()) &&
           Number.isSafeInteger(row.timestamp) && row.timestamp >= 0 && row.timestamp * 1000 <= now() + 1000 &&
           (row.value === null || (Number.isFinite(row.value) && row.value >= 0)));
         if (valid.length) {
@@ -85,7 +87,7 @@
         }
         await prune();
       },
-      async readLatest(tokenKey, valueType, requestedEnd = null) {
+      async readLatest(tokenKey, valueType, requestedEnd = null, {windowSeconds = 900, maxRows = 900, allUnits = false} = {}) {
         await prune();
         const db = await open(), tx = db.transaction("samples", "readonly"), done = completed(tx);
         const chosenEnd = Number.isSafeInteger(requestedEnd) && requestedEnd >= 0 ? Math.min(requestedEnd, Math.floor(now() / 1000)) : null;
@@ -98,8 +100,8 @@
           if (!cursor) return;
           const row = cursor.value;
           if (unit === null) { end ??= row.timestamp; unit = row.unit; }
-          if (row.timestamp <= end - 900 || rows.length >= 900) return;
-          if (row.unit === unit) rows.push(row);
+          if (row.timestamp < end - windowSeconds || (!allUnits && row.timestamp === end - windowSeconds) || rows.length >= maxRows) return;
+          if (allUnits || row.unit === unit) rows.push(row);
           cursor.continue();
         };
         await done;

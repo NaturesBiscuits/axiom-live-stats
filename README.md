@@ -14,11 +14,13 @@ A read-only Chrome Manifest V3 extension with Axiom statistics, Bundlers, Holder
 
 ## Collected stats
 
-Global Fees Paid, Price, Liquidity, Supply, ATH, 5m Volume, Buys, Sells, Net Volume, Holders, and Axiom's displayed Bundlers percentage.
+Global Fees Paid, Price, Liquidity, Supply, ATH, 5m Volume, Buys, Sells, Net Volume, Holders, and Axiom's displayed Bundlers percentage. The compact **Liquidity history** section records Axiom-reported liquidity locally from monitoring start, including coins only seconds old; no API or credits are used.
+
+See [LIQUIDITY_HISTORY.md](LIQUIDITY_HISTORY.md) for sampling/identity rules, baseline tolerance, coverage, separate retention limits, regression coverage and live Axiom checks.
 
 ## Test changes
 
-After changing extension files, click **Reload** on `chrome://extensions`, then refresh the Axiom page and dashboard. Axiom is the only required host permission; loading optional historical candles requests GeckoTerminal access. The manifest injects the holder extractor, token detector, rolling chart store and cached live-value reader before `content.js`.
+After changing extension files, click **Reload** on `chrome://extensions`, then refresh the Axiom page and dashboard. Axiom is the only required host permission; loading optional historical candles requests GeckoTerminal access. The manifest injects the holder extractor, token detector, rolling chart store, cached live-value reader and liquidity recorder before `content.js`.
 
 ## Common issues
 
@@ -35,6 +37,8 @@ After changing extension files, click **Reload** on `chrome://extensions`, then 
 - `content.js`: Reads market DOM text and sends a roughly 3-second heartbeat. Holder-only changes reuse the last market reading without rescanning the document. Holder sessions use pathname plus recognized identity query parameters.
 - `rollingChartCollector.js`: Small/subscript price parsing, independent clocks, one-second slots, bounded histories, null gaps, merges and exports.
 - `liveValueObserver.js`: Cached cells and reused MutationObserver; successful unchanged reads renew DOM readability without changing the numeric-change time.
+- `liquidityHistory.js`: Independent five-second attempts, displayed amount parsing, explicit identity/status, window baselines and coverage math.
+- `liquidityDashboard.js`: Currency-isolated liquidity summaries and 30s/1m/5m/15m charts of actual attempts, with exact hover values.
 - `background.js`: Existing dashboard/snapshot flow, independent delivery timestamps, bounded pending records and 15-second IndexedDB batches.
 - `sampleArchive.js`: Native IndexedDB, token/metric/unit keys, indexed historical-window reads, deduplication and retention.
 - `chartView.js`: Locally bundled chart, precise hover values, UTC axis, autoscaling and separate gap segments.
@@ -43,7 +47,7 @@ After changing extension files, click **Reload** on `chrome://extensions`, then 
 
 ## Scope and privacy
 
-Read-only extension. Market statistics, holders and chart values come from Axiom's rendered DOM. The active version makes no external market API requests and needs no Axiom credentials, wallet access, network interception, screenshots or session tokens. Token identity uses a whitelist of chain/network/mint/pool query parameters; unrelated query parameters are not collected. Actual chart sampling attempts persist locally in IndexedDB with bounded age/count retention. No machine learning or automated trading is included.
+Read-only extension. Local market statistics, holders and liquidity/price observations come from Axiom's rendered DOM without external API calls. The existing optional historical-price view calls GeckoTerminal only on explicit request. Neither feature needs Axiom credentials, wallet access, network interception, screenshots or session tokens. Token identity uses a whitelist of chain/network/mint/pool query parameters; unrelated query parameters are not collected. Actual chart sampling attempts persist locally in IndexedDB with bounded age/count retention. No machine learning or automated trading is included.
 
 
 ## Bundlers % (v0.2)

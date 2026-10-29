@@ -1,0 +1,47 @@
+# Local liquidity history
+
+Liquidity history records **Axiom-reported liquidity** from the first monitoring attempt, without a token-age requirement, API, key, credits, backend, wallet connection or trading action. The existing manually requested historical-price feature is unchanged and never supplies liquidity observations.
+
+## Collection and identity
+
+- The first read runs when the token context binds, including on a token route whose other market cards have not loaded. A self-scheduling timer then targets 5,000 ms after each actual attempt. Mutation/heartbeat publications can trigger a due attempt, but always execute another DOM read; cached snapshots and `capturedAt` never supply the observation.
+- The reader reuses cached Liquidity label/value cells and the existing mutation observer. It preserves displayed text, rather than replacing it with tooltip text. `$5.56K` becomes `5560 USD`, `$1.2M` becomes `1200000 USD`; unmarked numbers retain `unspecified` currency. Valid unchanged amounts remain independent observations.
+- `sampledAt`, `domReadAt` and successful `observedAt` are actual Unix milliseconds. `timestamp` is the Unix second containing that attempt, used as the IndexedDB key and chart coordinate. Worker receipt adds `deliveredAt`. A delayed callback creates one attempt at execution time; no missed interval is filled or persisted.
+- `status` distinguishes `valid`, `missing`, `invalid`, `awaiting-token` and `identity-conflict`. Unavailable values are `null`, including after restoration. Valid zero is preserved. Each attempt contains its network, mint, pool, untyped route hint, source identity and identified currency.
+- Network/token/pool identity and currency define separate series. A detected pool change or migration clears the current view and starts the corresponding pool's series. The route address is never assumed to be a pool. Unresolved identity uses an explicit page-session/context scope, so unknown pools cannot merge across reloads or unrelated tabs. Resolution starts a separate identified series; conflicting identity yields null attempts. Unchanged previous-token cells remain unavailable until updated, including across rapid token hops.
+
+## Analysis and presentation
+
+The compact dashboard shows current and first retained observed liquidity, the current observation's exact time, percentage change since the first observation in the retained recording, recorded duration, coverage, and independent 30s/1m/5m/15m changes. Token age never substitutes for recorded duration. Each currency is selectable independently.
+
+Window changes end at the **latest valid observation**, whose timestamp stays visible even when the source is missing or disconnected. The baseline must be a valid observation within **±2,500 ms**, inclusive, of `latest.domReadAt - window`; the nearest qualifies. The recording must also span at least the entire requested window. A 27.5-second recording cannot claim a 30-second change even though its first sample is inside the tolerance. A short recording says **Collecting history**; a full duration without a suitable baseline, or with a zero baseline, says **Insufficient data**. Zero and nonfinite percentage denominators/results remain unavailable. Baselines and endpoints are exposed in the window hover titles.
+
+Recorded duration is first-to-last valid read time. Coverage is the fraction of expected five-second slots occupied by valid observations between the first and last **actual retained attempts in the selected currency**. Delays and unavailable readings reduce coverage; slot counts are analysis only, never synthetic records. Attempts whose currency cannot be identified remain in the `unspecified` series. Saved coverage describes that recorded period; recent worker delivery is checked separately and cannot be inferred from disk timestamps.
+
+The chart offers 30s/1m/5m/15m views ending at the last attempt and fits available observations when short. Axis values use readable amounts; hover shows the exact stored numeric value, currency, original displayed text and read time. Its timeline contains only actual attempts. Lines break at unavailable values or between valid reads separated by **more than 7,500 ms** (1.5 expected intervals); separate currencies and pools never connect. Heavily fragmented views show isolated points. Changes describe observed USD liquidity valuations, not confirmed liquidity additions/removals or a safe-to-buy guarantee. Successful DOM reads do not verify upstream feed freshness.
+
+## Persistence and bounds
+
+The existing native IndexedDB archive implementation is reused with a separate database, **`axiom-liquidity-v1`**, and compound keys `[tokenKey, valueType, unit, timestamp]`. This does not change or migrate `axiom-free-chart-v2` price/market-cap records or their settings. Native upserts preserve newer duplicate attempts; original timestamps survive extension-worker and full browser restarts. Saved rows never seed a current DOM reading or connected source.
+
+- Disk: **24 hours / 10,000 actual attempts globally**, whichever prunes first. Both valid and unavailable attempts count. Oldest records are removed first. These bounds are independent of the price archive controls.
+- Worker memory: at most **eight token/currency series and 10,000 attempts total**; age pruning also applies. The dashboard retains at most 10,000 current-token attempts.
+- Persistence: reuse the existing **15-second batches**, **5,000 pending-record bound**, and best-effort page-hide flush. Abrupt shutdown may lose a pending batch. A liquidity archive failure reports a separate error and retries bounded pending records while price persistence and live liquidity collection continue.
+- Once retention removes the beginning of a recording, first/change/duration summaries refer explicitly to the retained portion. Clearing extension data or uninstalling removes local history.
+
+## Validation
+
+Run `npm.cmd test`, `npm.cmd run test:browser`, and `npm.cmd run test:storage`. The unit/protocol suite covers parsing, unchanged values, young coins, incomplete windows, tolerance boundaries, zero baselines, missing/invalid attempts, delayed timers, pool/network/token/currency separation, unresolved sessions, source validation, restored timestamps and independent storage failures. Real Chromium fixtures cover fresh cached-cell reads, tooltip/display differences, stale-token guards, five-second sampling, dashboard views and gap rendering. Two separate browser processes verify native IndexedDB restoration, age/count pruning, unavailable records and preservation of the price archive.
+
+Results on 2026-10-30: **44 unit/protocol tests, 30 browser scenarios and 20 native IndexedDB checks passed**; `git diff --check` passed. The initial sandboxed browser launches failed because Chrome's GPU subprocess was denied access; the same local suites passed with execution permission outside that sandbox. A tooltip/display mismatch exposed by the rapid token-switch browser regression was fixed before the final passing run. No remaining automated failures. Live authenticated Axiom checks and the opt-in external API smoke script were not run for this local-only change.
+
+Changed files: `liquidityHistory.js`, `liquidityDashboard.js`, `content.js`, `liveValueObserver.js`, `background.js`, `sampleArchive.js`, `manifest.json`, `dashboard.html`, `dashboard.css`, `dashboard.js`, `package.json`, `tests/liquidity-history.test.js`, `tests/background.test.js`, `tests/browser-tests.html`, `tests/browser-tests.js`, `tests/storage-tests.html`, `tests/storage-tests.js`, `tests/chromium-harness.js`, `README.md`, and this document. No dependencies were added or vendor files changed.
+
+Remaining live Axiom checks:
+
+1. Reload the extension and refresh Axiom/dashboard. Open a coin only seconds old and compare the Liquidity card with the new current/first values. Observe for 30s, 1m, 5m and 15m; longer changes must remain collecting until their full duration exists. Leave an unchanged value visible to confirm that observation times still advance.
+2. Check supported SOL, BNB/ETH and available native-currency layouts. Compare exact hover values with displayed amounts. Unsupported/hidden/removed cells must remain unavailable, never zero. Verify existing market, Bundlers, Holders and price/market-cap charts.
+3. Switch tokens, networks and pools (including migration on the same route). Confirm separate histories, explicit unresolved pools and no stale previous-token value during loading. Revisit an identified pool to check restoration of only its own series.
+4. Keep the source visible, then background or suspend it for at least 20s. Resume: expect one actual new reading and a broken line, without intermediate records. Check read time and coverage separately from token age and delivery status.
+5. Close the dashboard while leaving Axiom open. Wait for a batch, reopen, then restart Chrome and reload local liquidity. Verify original timestamps and a saved/delayed source state until a real new sample arrives. Inspect `axiom-liquidity-v1` for five-second actual attempts and compare the untouched price database.
+6. Check a narrow dashboard window, currency/view selectors, exact hover text and extension consoles. Confirm that local liquidity sends no external market requests or trading actions. Automated local fixtures do not validate every current Axiom layout or live migration markup.

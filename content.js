@@ -59,7 +59,7 @@
     const holdersNode = spans.find(el => /^Holders\s*\([\d,]+\)$/.test(clean(el.textContent)));
     stats.holders = clean(holdersNode?.textContent).match(/\(([\d,]+)\)/)?.[1] ?? null;
     stats.bundlers = readTokenInfoPercent(spans, "Bundlers");
-    if (stats.globalFees === null && stats.volume5m === null) return null;
+    if (stats.globalFees === null && stats.volume5m === null && stats.liquidity === null) return null;
     return {
       title: document.title || "Axiom token",
       url: location.origin + location.pathname,
@@ -77,6 +77,8 @@
   const identitySelector = '[data-token-mint], [data-mint-address], [data-token-address], [data-pool-address], [data-pair-address], [data-chain], [data-network], a[href*="geckoterminal.com/"], a[href*="scan.io/token/"], a[href*="scan.com/token/"], a[href*="scan.org/token/"]';
   const rolling = AxiomRollingChart.createStore();
   const liveValues = AxiomLiveValueObserver.createReader((type, parsed, at, details) => rolling.observe(type, parsed, at, details));
+  const liquidity = AxiomLiquidityHistory.createRecorder();
+  const liquidityReader = AxiomLiveValueObserver.createReader(() => {}, Date.now, [["liquidity", ["liquidity"]]]);
   const pageKey = () => location.origin + location.pathname;
   const holderMonitor = AxiomHolderTableExtractor.createMonitor(() => {
     // Holder mutations use the last market reading; they do not rescan the page.
@@ -89,7 +91,7 @@
     const snapshot = {...marketSnapshot, capturedAt: Date.now(), holdersIntelligence: holderMonitor.getState()};
     const fingerprint = JSON.stringify({
       title: snapshot.title, url: snapshot.url, stats: snapshot.stats,
-      holdersIntelligence: snapshot.holdersIntelligence, chartContext: snapshot.chartContext
+      holdersIntelligence: snapshot.holdersIntelligence, chartContext: snapshot.chartContext, liquidityContext: snapshot.liquidityContext
     });
     if (fingerprint === lastFingerprint && Date.now() - lastSentAt < 3000) return;
     lastFingerprint = fingerprint;
@@ -108,7 +110,7 @@
     const previousContext = marketSnapshot?.chartContext;
     const snapshot = collect();
     // Clear the previous token even when the new route has not loaded its stats.
-    if (!snapshot && !marketSnapshot) return;
+    if (!snapshot && !marketSnapshot && !/^\/meme\//.test(location.pathname)) return;
     marketSnapshot = snapshot || {
       title: document.title || "Axiom", url: pageKey(), stats: Object.fromEntries(
         [...Object.keys(labels), "holders", "bundlers"].map(key => [key, null])
@@ -122,6 +124,10 @@
     rolling.setToken(marketSnapshot.chartContext);
     liveValues.setToken(marketSnapshot.chartContext.sourceKey);
     liveValues.bind(cachedSpans.filter(node => node.isConnected));
+    liquidity.setContext(marketSnapshot.chartContext);
+    marketSnapshot.liquidityContext = liquidity.context();
+    liquidityReader.setToken(marketSnapshot.chartContext.sourceKey);
+    liquidityReader.bind(cachedSpans.filter(node => node.isConnected));
     tokenPending = false;
     collecting = true;
     try {
@@ -130,6 +136,7 @@
       collecting = false;
     }
     sendSnapshot();
+    sampleLiquidity();
   }
 
   function schedule() {
@@ -150,7 +157,7 @@
         identityChanged) {
       tokenPending = true;
     }
-    if (!tokenPending) liveValues.mutations(records);
+    if (!tokenPending) { liveValues.mutations(records); liquidityReader.mutations(records); }
     // The separate scoped observer handles holder rows, including recycled nodes.
     if (records.some(record => !holderMonitor.contains(record.target))) schedule();
   });
@@ -163,6 +170,20 @@
   schedule();
   let heartbeat = setInterval(schedule, 2500);
   let samplerStart = null;
+  let liquidityTimer = null;
+  function sampleLiquidity() {
+    const ready = marketSnapshot && !tokenPending && marketSnapshot.chartContext.routeKey === AxiomTokenContextDetector.routeKey();
+    const row = ready ? liquidity.sample(() => liquidityReader.readAttempt("liquidity"), Date.now(), document.hidden) : null;
+    clearTimeout(liquidityTimer);
+    liquidityTimer = setTimeout(sampleLiquidity, ready ? liquidity.delay() : AxiomLiquidityHistory.CADENCE_MS);
+    if (!row) return;
+    try { chrome.runtime.sendMessage({type: "AXIOM_LIQUIDITY_UPDATE", row}, () => { void chrome.runtime.lastError; }); }
+    catch { /* Reloaded extension: never replay cached snapshots as observations. */ }
+  }
+  function startLiquiditySampler() {
+    clearTimeout(liquidityTimer);
+    sampleLiquidity();
+  }
   function sample() {
     if (!marketSnapshot || tokenPending || marketSnapshot.chartContext.routeKey !== AxiomTokenContextDetector.routeKey()) {
       schedule(); return;
@@ -189,8 +210,9 @@
     };
     samplerStart = setTimeout(run, 1000 - Date.now() % 1000);
   }
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) startSampler(); });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) { startSampler(); startLiquiditySampler(); } });
   startSampler();
+  startLiquiditySampler();
   window.addEventListener("pagehide", () => {
     marketObserver.disconnect();
     holderMonitor.disconnect();
@@ -198,6 +220,7 @@
     pendingTimer = null;
     clearInterval(heartbeat);
     clearTimeout(samplerStart);
+    clearTimeout(liquidityTimer);
     try { chrome.runtime.sendMessage({type: "AXIOM_DOM_CHART_FLUSH"}, () => { void chrome.runtime.lastError; }); }
     catch { /* Best effort navigation flush; normal persistence is batched. */ }
   });
@@ -211,5 +234,6 @@
     heartbeat = setInterval(schedule, 2500);
     schedule();
     startSampler();
+    startLiquiditySampler();
   });
 })();

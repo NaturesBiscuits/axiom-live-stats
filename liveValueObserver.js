@@ -2,7 +2,7 @@
 (() => {
   "use strict";
   const clean = value => (value ?? "").replace(/\s+/g, " ").trim();
-  function createReader(onObservation, now = Date.now) {
+  function createReader(onObservation, now = Date.now, definitions = [["price", ["price"]], ["marketCap", ["market cap", "marketcap", "mkt cap"]]]) {
     let tokenKey = null;
     const bindings = new Map();
     const previousText = new Map();
@@ -13,7 +13,7 @@
         binding.allowedLabels.includes(clean(binding.label.textContent).toLowerCase()) &&
         !binding.scope.closest('[hidden], [aria-hidden="true"]');
     }
-    function text(binding) {
+    function text(binding, preferFull = true) {
       if (!available(binding)) return null;
       const flatten = node => {
         if (node.nodeType === 3) return node.textContent;
@@ -28,14 +28,14 @@
       const cells = Array.from(binding.scope.children).filter(child => child !== binding.label);
       const raw = cells.map(flatten).join("").trim();
       // Prefer an explicit full numeric value/tooltip on the value cell when supplied.
-      for (const cell of cells) for (const attribute of [binding.type === "price" ? "data-price" : "data-market-cap", "data-full-value", "title"]) {
+      if (preferFull) for (const cell of cells) for (const attribute of [binding.type === "price" ? "data-price" : "data-market-cap", "data-full-value", "title"]) {
         const full = cell.getAttribute(attribute), parsed = AxiomRollingChart.parseValue(full);
         if (parsed) return parsed.unit === "unspecified" && /^[$€£]/.test(raw) ? raw[0] + full : full;
       }
       return raw;
     }
     function read(type, binding, mutation = false) {
-      const raw = text(binding);
+      const raw = text(binding, binding.type !== "liquidity");
       if (binding.waiting && !mutation && raw === previousText.get(type)) { onObservation(type, null); return; }
       if (raw === null) { onObservation(type, null); return; }
       binding.waiting = false;
@@ -57,13 +57,13 @@
         tokenKey = nextKey; bindings.clear();
       },
       bind(spans) {
-        for (const [type, labels] of [["price", ["price"]], ["marketCap", ["market cap", "marketcap", "mkt cap"]]]) {
+        for (const [type, labels] of definitions) {
           const label = spans.find(node => node.childElementCount === 0 && labels.includes(clean(node.textContent).toLowerCase()) &&
             !node.closest('[data-perf-id*="table"], [role="row"]'));
           const existing = bindings.get(type);
           if (!label?.parentElement) { bindings.delete(type); onObservation(type, null); continue; }
           if (existing?.label !== label) {
-            bindings.set(type, {type, label, scope: label.parentElement, lastText: null,
+            bindings.set(type, {type, label, scope: label.parentElement, lastText: previousText.get(type) ?? null,
               allowedLabels: labels, initialized: false, waiting: switched && previousText.has(type) && label === previousNodes.get(type)});
           }
           read(type, bindings.get(type));
@@ -85,6 +85,12 @@
       },
       readLatest() {
         for (const [type, binding] of bindings) read(type, binding);
+      },
+      readAttempt(type) {
+        const binding = bindings.get(type), domReadAt = now();
+        const displayText = binding ? text(binding, false) : null;
+        const waiting = binding?.waiting && displayText === previousText.get(type);
+        return {displayText, domReadAt, status: waiting ? "awaiting-token" : "read"};
       }
     };
   }

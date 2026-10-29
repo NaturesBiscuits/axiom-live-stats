@@ -133,6 +133,7 @@ function render(snapshot) {
   document.getElementById("updatedAt").textContent = new Date(lastSeenAt).toLocaleTimeString();
   renderHolders(snapshot);
   AxiomChartUI.setSnapshot(snapshot);
+  globalThis.AxiomLiquidityUI?.setContext(snapshot.liquidityContext);
   updateStatus();
 }
 

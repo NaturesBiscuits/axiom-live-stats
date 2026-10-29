@@ -9,6 +9,6 @@
   "background": {"service_worker": "background.js"},
   "action": {"default_title": "Open Axiom Live Stats"},
   "content_scripts": [
-    {"matches": ["https://axiom.trade/*"], "js": ["holderTableExtractor.js", "tokenContextDetector.js", "rollingChartCollector.js", "liveValueObserver.js", "content.js"], "run_at": "document_idle"}
+    {"matches": ["https://axiom.trade/*"], "js": ["holderTableExtractor.js", "tokenContextDetector.js", "rollingChartCollector.js", "liveValueObserver.js", "liquidityHistory.js", "content.js"], "run_at": "document_idle"}
   ]
 }

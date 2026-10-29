@@ -4,6 +4,10 @@
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
   const phase = new URL(location.href).searchParams.get("phase");
   const checks = [];
+  const H = AxiomLiquidityHistory;
+  const liquidity = AxiomSampleArchive.createArchive({databaseName: "axiom-liquidity-restart-fixture", valueTypes: ["liquidity"],
+    source: H.SOURCE, defaults: {retentionHours: H.RETENTION_HOURS, maxRecords: H.MAX_RECORDS},
+    maxTokenKeyLength: 4096, validateRow: H.isAttempt});
   const at = Math.floor(Date.now() / 1000);
   const row = (tokenKey, valueType, timestamp, value) => ({tokenKey, valueType, timestamp, unit: "USD", value,
     tokenIdentity: {blockchain: "solana", mintAddress: tokenKey}, source: "axiom-dom-sample",
@@ -46,11 +50,52 @@
       assert((await archive.readLatest("expired-token", "price")).samples.length === 0, "Expired observations are removed"); checks.push("age retention");
       assert(AxiomRollingChart.toJSONL(series).split("\n").length === 900, "Persisted numeric samples export without duplicates"); checks.push("persisted JSONL export");
     }
-    archive.close();
+    if (phase === "write") {
+      const recorder = H.createRecorder({sessionId: "storage-test"});
+      recorder.setContext({sourceKey: "token-pool-a", blockchain: "solana", mintAddress: "mint", poolAddress: "pool-a"});
+      const base = at * 1000 - 20000;
+      const make = (index, text) => recorder.sample(() => ({displayText: text, domReadAt: base + index * 5000}), base + index * 5000);
+      const rows = [make(0, "$5.56K"), make(1, "$5.56K"), make(2, null), make(3, "$bad"), make(4, "1 SOL")];
+      recorder.setContext({sourceKey: "token-pool-b", blockchain: "solana", mintAddress: "mint", poolAddress: "pool-b"});
+      const poolB = make(4, "$1.2M");
+      await liquidity.write([...rows, poolB]);
+      await liquidity.write([rows[0]]);
+      assert((await liquidity.stats()).count === 6, "Liquidity records include unchanged, missing and invalid attempts, without duplicate keys");
+      const saved = await liquidity.readLatest(rows[0].tokenKey, "liquidity", null, {windowSeconds: 86400, maxRows: 10000, allUnits: true});
+      assert(saved.samples.length === 5 && saved.samples[2].status === "missing" && saved.samples[3].status === "invalid", "Missing/invalid remain null persisted attempts");
+      assert(saved.samples[0].value === 5560 && saved.samples[0].displayText === "$5.56K" && saved.samples[0].observedAt === base, "Original text, value and exact time persist");
+      assert(saved.samples.at(-1).unit === "SOL", "Currencies stay distinct in native storage");
+      assert((await liquidity.readLatest(poolB.tokenKey, "liquidity")).samples.length === 1, "Migration uses its separate pool series");
+      await liquidity.setMeta("restart-check", {tokenKey: rows[0].tokenKey, poolKey: poolB.tokenKey, base});
+      assert((await liquidity.getSettings()).maxRecords === 10000, "Liquidity defaults to a separate 10,000-record archive");
+      checks.push("liquidity attempts/text/timestamps/currency/pool persistence", "liquidity separate defaults");
+    } else {
+      const prior = await liquidity.getMeta("restart-check");
+      const saved = await liquidity.readLatest(prior.tokenKey, "liquidity", null, {windowSeconds: 86400, maxRows: 10000, allUnits: true});
+      assert(saved.samples.length === 5 && saved.samples[0].observedAt === prior.base && saved.samples[0].sampledAt === prior.base, "Separate browser restart preserves actual liquidity read times");
+      assert(saved.samples[2].value === null && saved.samples[3].value === null, "Unavailable readings never become zero after restoration");
+      const restored = saved.samples[0];
+      const old = {...restored, sampledAt: restored.sampledAt - 500000000, domReadAt: restored.domReadAt - 500000000,
+        observedAt: restored.observedAt - 500000000, timestamp: restored.timestamp - 500000, tokenKey: "expired-liquidity"};
+      await liquidity.write([old]);
+      assert((await liquidity.readLatest("expired-liquidity", "liquidity")).samples.length === 0, "Liquidity age retention removes expired observations");
+      await liquidity.setSettings({retentionHours: 24, maxRecords: 1000});
+      const extra = Array.from({length: 1100}, (_, index) => {
+        const sampledAt = at * 1000 - index * 5000;
+        return {...restored, tokenKey: "limit-liquidity", sampledAt, domReadAt: sampledAt, observedAt: sampledAt, timestamp: sampledAt / 1000};
+      });
+      await liquidity.write(extra);
+      assert((await liquidity.stats()).count === 1000, "Liquidity global record cap evicts oldest records");
+      const retained = await liquidity.readLatest("limit-liquidity", "liquidity", null, {windowSeconds: 86400, maxRows: 10000, allUnits: true});
+      assert(retained.samples[0].sampledAt > extra.at(-1).sampledAt, "Count retention removes older liquidity attempts first");
+      assert((await archive.readLatest("token-a", "price")).samples.length > 0, "Liquidity pruning preserves the existing price archive");
+      checks.push("liquidity browser restart timestamps", "liquidity null restoration", "liquidity age/count retention", "price archive preserved");
+    }
+    liquidity.close(); archive.close();
     document.body.dataset.testStatus = "passed";
     document.getElementById("results").textContent = JSON.stringify({phase, passed: checks.length, checks});
   } catch (error) {
-    archive.close(); document.body.dataset.testStatus = "failed";
+    liquidity.close(); archive.close(); document.body.dataset.testStatus = "failed";
     document.getElementById("results").textContent = JSON.stringify({phase, passed: checks.length, error: error.stack});
   }
 })();
