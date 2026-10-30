@@ -13,7 +13,7 @@
   let discoveryNeeded = true;
   const isStatLabel = node => node.nodeType === 1 && node.childElementCount === 0 &&
     (Object.values(labels).includes(clean(node.textContent)) ||
-      /^(?:Holders\s*\([\d,]+\)|Bundlers|Market\s?Cap|Mkt\s?Cap)$/i.test(clean(node.textContent)));
+      /^(?:Holders\s*\([\d,]+\)|Bundlers|Top 10 H\.|Market\s?Cap|Mkt\s?Cap)$/i.test(clean(node.textContent)));
   function statSpans() {
     const route = AxiomTokenContextDetector.routeKey();
     const missing = cachedSpans.length === 0 || cachedSpans.some(node => !node.isConnected);
@@ -36,17 +36,17 @@
   }
 
   // Axiom's Token Info tiles put the percentage ABOVE the text label.
-  // This reads Axiom's displayed bundle-holder percentage; it does not
-  // independently classify on-chain bundles or wallets.
+  // Read the displayed percentage only within the matching tile; these
+  // are Axiom-reported metrics, not independent wallet calculations.
   function readTokenInfoPercent(spans, label) {
     const node = spans.find(el =>
       el.childElementCount === 0 && clean(el.textContent) === label
     );
     const card = node?.parentElement?.parentElement;
-    if (!card) return null;
+    if (!card || !card.getClientRects().length || card.closest('[hidden], [aria-hidden="true"]')) return null;
     return Array.from(card.querySelectorAll("span"))
       .map(el => clean(el.textContent))
-      .find(text => /^\d+(?:\.\d+)?%$/.test(text)) ?? null;
+      .find(text => /^\d+(?:\.\d+)?%$/.test(text) && Number(text.slice(0, -1)) <= 100) ?? null;
   }
 
   function collect() {
@@ -59,7 +59,8 @@
     const holdersNode = spans.find(el => /^Holders\s*\([\d,]+\)$/.test(clean(el.textContent)));
     stats.holders = clean(holdersNode?.textContent).match(/\(([\d,]+)\)/)?.[1] ?? null;
     stats.bundlers = readTokenInfoPercent(spans, "Bundlers");
-    if (stats.globalFees === null && stats.volume5m === null && stats.liquidity === null) return null;
+    stats.top10Holders = readTokenInfoPercent(spans, "Top 10 H.");
+    if (stats.globalFees === null && stats.volume5m === null && stats.liquidity === null && stats.top10Holders === null) return null;
     return {
       title: document.title || "Axiom token",
       url: location.origin + location.pathname,
@@ -113,7 +114,7 @@
     if (!snapshot && !marketSnapshot && !/^\/meme\//.test(location.pathname)) return;
     marketSnapshot = snapshot || {
       title: document.title || "Axiom", url: pageKey(), stats: Object.fromEntries(
-        [...Object.keys(labels), "holders", "bundlers"].map(key => [key, null])
+        [...Object.keys(labels), "holders", "bundlers", "top10Holders"].map(key => [key, null])
       )
     };
     marketSnapshot.chartContext = !contextDiscoveryNeeded && previousContext?.routeKey === AxiomTokenContextDetector.routeKey() ?

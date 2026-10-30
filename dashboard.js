@@ -1,7 +1,7 @@
 "use strict";
 const fields = [
   "globalFees", "price", "liquidity", "supply", "ath",
-  "volume5m", "buys", "sells", "netVolume", "holders", "bundlers"
+  "volume5m", "buys", "sells", "netVolume", "holders", "bundlers", "top10Holders"
 ];
 let lastSeenAt = null;
 let lastHolderFingerprint = "";

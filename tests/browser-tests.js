@@ -330,18 +330,32 @@
         ["Supply", "1B"], ["ATH", "$0.002"], ["5m Vol", "$4K"], ["Buys", "10 / $3K"],
         ["Sells", "5 / $1K"], ["Net Vol.", "+$2K"]
       ].map(([label, value]) => `<div><span>${label}</span><span>${value}</span></div>`).join("") +
-        '<button role="tab"><span>Holders (1,234)</span></button><div><div><span>12.5%</span></div><div><span>Bundlers</span></div></div>';
+        '<button role="tab"><span>Holders (1,234)</span></button><div><div><span>12.5%</span></div><div><span>Bundlers</span></div></div>' +
+        await (await fetch("fixtures/top-ten-holders.html")).text();
       window.chrome = {runtime: {sendMessage(message, callback) { sent.push(message); callback?.(); }}};
       await loadScript(document, "../content.js");
       await pause(620);
       const snapshot = statsMessages().at(-1)?.snapshot;
       assert(statsMessages().at(-1)?.type === "AXIOM_STATS_UPDATE", "Existing message reused");
       assert(snapshot.stats.globalFees === "12 SOL" && snapshot.stats.price === "$0.001" && snapshot.stats.volume5m === "$4K", "Core market stats unchanged");
-      for (const [key, expected] of Object.entries({liquidity: "$20K", supply: "1B", ath: "$0.002", buys: "10 / $3K", sells: "5 / $1K", netVolume: "+$2K", holders: "1,234", bundlers: "12.5%"})) {
+      for (const [key, expected] of Object.entries({liquidity: "$20K", supply: "1B", ath: "$0.002", buys: "10 / $3K", sells: "5 / $1K", netVolume: "+$2K", holders: "1,234", bundlers: "12.5%", top10Holders: "14.05%"})) {
         assert(snapshot.stats[key] === expected, `${key} preserved`);
       }
       assert(snapshot.holdersIntelligence.totalReported === 1234 && snapshot.holdersIntelligence.renderedBundlers === 1, "Holder snapshot attached");
       assert(snapshot.holdersIntelligence.tokenKey === snapshot.tokenKey, "Token association");
+    });
+    await test("Top 10 holder tile reads its own percentage, updates zero and clears invalid or hidden values", async () => {
+      const label = [...document.querySelectorAll("#market span")].find(node => node.textContent === "Top 10 H.");
+      const card = label.parentElement.parentElement, value = card.querySelector("span");
+      for (const [text, expected] of [["0%", "0%"], ["101%", null], ["—", null], ["14.05%", "14.05%"]]) {
+        value.textContent = text; await pause(560);
+        assert(statsMessages().at(-1).snapshot.stats.top10Holders === expected, `Top 10 value ${text} stays scoped/validated`);
+        assert(statsMessages().at(-1).snapshot.stats.bundlers === "12.5%", "Nearby Bundlers value is separate");
+      }
+      card.hidden = true; await pause(560);
+      assert(statsMessages().at(-1).snapshot.stats.top10Holders === null, "Hidden top-holder tile is unavailable");
+      card.hidden = false; await pause(560);
+      assert(statsMessages().at(-1).snapshot.stats.top10Holders === "14.05%", "Visible tile restores its displayed percentage");
     });
     await test("Holder mutations publish changed data without scanning the document", async () => {
       let scans = 0;
@@ -435,6 +449,7 @@
       await loadScript(doc, new URL("../dashboard.js", location.href).href);
       await pause(20);
       assert(doc.getElementById("globalFees").textContent === "12 SOL" && doc.getElementById("bundlers").textContent === "12.5%", "Market metrics still rendered");
+      assert(doc.getElementById("top10Holders").textContent === "14.05%", "Top 10 Holders card displays Axiom's percentage");
       assert(doc.getElementById("holderTotal").textContent === "1,234" && doc.getElementById("holderRendered").textContent === "1", "Summary cards");
       assert(doc.getElementById("holderCoverage").textContent === "Partial", "Partial coverage explicit");
       assert(doc.getElementById("holderRows").querySelectorAll("td").length === 11, "All holder columns rendered");
@@ -458,6 +473,8 @@
       snapshot.tokenKey = snapshot.url;
       dispatchStorage({latestSnapshot: {newValue: snapshot}});
       assert(!doc.querySelector(".bundler-badge") && doc.querySelector(".empty-holders"), "Mismatched token data cleared");
+      dispatchStorage({latestSnapshot: {newValue: {...snapshot, stats: {...snapshot.stats, top10Holders: null}}}});
+      assert(doc.getElementById("top10Holders").textContent === "—", "Unavailable top-holder data clears the dashboard value");
       window.dispatchEvent(new Event("pagehide"));
     });
     await test("Liquidity dashboard renders short saved history without a live connection, isolates currencies and breaks missed periods", () => {

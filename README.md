@@ -14,7 +14,7 @@ A read-only Chrome Manifest V3 extension with Axiom statistics, Bundlers, Holder
 
 ## Collected stats
 
-Global Fees Paid, Price, Liquidity, Supply, ATH, 5m Volume, Buys, Sells, Net Volume, Holders, and Axiom's displayed Bundlers percentage. The compact **Liquidity history** section records Axiom-reported liquidity locally from monitoring start, including coins only seconds old; no API or credits are used.
+Global Fees Paid, Price, Liquidity, Supply, ATH, 5m Volume, Buys, Sells, Net Volume, Holders, and Axiom's displayed Bundlers and Top 10 Holders percentages. The compact **Liquidity history** section records Axiom-reported liquidity locally from monitoring start, including coins only seconds old; no API or credits are used.
 
 See [LIQUIDITY_HISTORY.md](LIQUIDITY_HISTORY.md) for sampling/identity rules, baseline tolerance, coverage, separate retention limits, regression coverage and live Axiom checks.
 
@@ -49,6 +49,10 @@ After changing extension files, click **Reload** on `chrome://extensions`, then 
 
 Read-only extension. Local market statistics, holders and liquidity/price observations come from Axiom's rendered DOM without external API calls. The existing optional historical-price view calls GeckoTerminal only on explicit request. Neither feature needs Axiom credentials, wallet access, network interception, screenshots or session tokens. Token identity uses a whitelist of chain/network/mint/pool query parameters; unrelated query parameters are not collected. Actual chart sampling attempts persist locally in IndexedDB with bounded age/count retention. No machine learning or automated trading is included.
 
+
+## Top 10 Holders (Axiom)
+
+The **Top 10 Holders (Axiom)** market card reads the percentage displayed above Axiom's exact **Top 10 H.** label in its Token Info tile, including the supplied icon/value/label layout. For example, `14.05%` is preserved as displayed and sent as `stats.top10Holders` through the existing snapshot flow. It is Axiom-reported holder concentration, not a percentage calculated from the extension's partial holder table. Valid `0%` is retained; missing, hidden, malformed or out-of-range values display `—`. Reads stay scoped to the matching tile, so nearby Bundlers percentages are not substituted. The browser fixture in `tests/fixtures/top-ten-holders.html` covers the supplied markup and regression checks cover value updates, zero, invalid/hidden states and dashboard clearing. Reload the extension and refresh Axiom/dashboard to enable the card, then compare it with the live Top 10 H. tile.
 
 ## Bundlers % (v0.2)
 
