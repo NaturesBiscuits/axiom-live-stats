@@ -35,6 +35,49 @@
     return bytes + text.match(/^1*/)[0].length === 32;
   }
   const addressKey = address => address.startsWith("0x") ? address.toLowerCase() : address;
+  let extractionSequence = 0;
+  const dataRows = rows => rows.map(({observedAt, extractionId, tokenContext, ...fields}) => fields);
+  const transitionRows = rows => dataRows(rows).map(({classification, ...fields}) => fields);
+  const visible = node => {
+    if (!node?.getClientRects().length || node.closest('[hidden], [aria-hidden="true"]')) return false;
+    const visibility = node.ownerDocument.defaultView.getComputedStyle(node).visibility;
+    return visibility !== "hidden" && visibility !== "collapse";
+  };
+
+  function tableMetadata(table) {
+    const doc = table?.ownerDocument;
+    const id = table?.getAttribute("data-perf-id");
+    let kind = id === "token-table-holders" ? "holders" : /^token-table-(?:top-traders|traders)$/.test(id ?? "") ? "top-traders" : "unknown";
+    const selected = [...(doc?.querySelectorAll('[role="tab"][aria-selected="true"]') ?? [])].filter(visible)
+      .map(tab => clean(tab.textContent)).filter(label => /^(?:Holders(?:\s*\([\d,]+\))?|Top Traders)$/i.test(label));
+    const selectedKinds = new Set(selected.map(label => /^Holders/i.test(label) ? "holders" : "top-traders"));
+    if (selectedKinds.size > 1) kind = "unknown";
+    else if (selectedKinds.has("top-traders")) kind = "top-traders";
+    const sorts = [...(table?.querySelectorAll('[aria-sort="ascending"], [aria-sort="descending"]') ?? [])]
+      .filter(node => !node.closest('[data-index]') && visible(node) &&
+        (node.matches('[role="columnheader"], th') || headerSchema(table)?.cells?.includes(node)));
+    const header = sorts.length === 1 ? sorts[0] : null;
+    const column = header ? headerField(header) : null;
+    return {activeTable: {kind, source: selected.length ? "aria-selected tab and table marker" : "data-perf-id", tableMarker: id ?? null},
+      sort: column ? {column, label: value(header), direction: header.getAttribute("aria-sort"), source: "aria-sort"} :
+        {column: null, direction: null, source: null, label: "Sort order unknown"}};
+  }
+
+  function classify(wallet, walletAddress, context) {
+    const unknown = {category: "unknown", source: "axiom-dom", verificationStatus: "unverified", evidence: []};
+    // Display names and protocol icons are recorded as text, never turned into a type.
+    const label = value(wallet);
+    if (label) unknown.evidence.push({kind: "display-label-only", text: label});
+    const badge = explicit(wallet, "wallet-classification");
+    const categories = {pool: "pool", "burn destination": "burn", locker: "locker", "other known contract": "other-contract"};
+    const category = categories[badge?.toLowerCase()];
+    if (category) return {category, source: "axiom-reported", verificationStatus: "axiom-reported",
+      evidence: [{kind: "explicit-wallet-classification", text: badge}]};
+    if (walletAddress && context?.blockchain && context.poolAddress && !context.conflict &&
+        addressKey(walletAddress) === addressKey(context.poolAddress)) return {category: "pool", source: "axiom-reported",
+      verificationStatus: "axiom-reported", evidence: [{kind: "pool-address-match", address: context.poolAddress}]};
+    return unknown;
+  }
 
   function fragments(cell) {
     if (!cell) return [];
@@ -57,11 +100,13 @@
   }
 
   function publicAddress(cell) {
-    if (!cell) return null;
+    const addresses = new Map();
+    const add = text => { if (isAddress(text)) addresses.set(addressKey(text), text); };
+    if (!cell) return {address: null, status: "unresolved"};
     for (const node of [cell, ...cell.querySelectorAll("[data-wallet-address], [data-address], [title], a")]) {
       for (const text of [node.getAttribute("data-wallet-address"), node.getAttribute("data-address"),
         node.getAttribute("title"), value(node)]) {
-        if (isAddress(text)) return text;
+        add(text);
       }
       // Only account/address links inside the WALLET cell establish identity.
       if (node.tagName === "A") {
@@ -69,11 +114,13 @@
           const url = new URL(node.getAttribute("href"), location.href);
           if (url.protocol !== "https:") continue;
           const match = url.pathname.match(/\/(?:account|address)\/([^/]+)\/?$/);
-          if (match && isAddress(match[1])) return match[1];
+          if (match) add(match[1]);
         } catch { /* No public address available. */ }
       }
     }
-    return fragments(cell).find(isAddress) ?? null;
+    fragments(cell).forEach(add);
+    return {address: addresses.size === 1 ? [...addresses.values()][0] : null,
+      status: addresses.size > 1 ? "conflicting" : addresses.size === 1 ? "resolved" : "unresolved"};
   }
 
   function transactionUrl(cell) {
@@ -101,6 +148,8 @@
     const count = rawCount && /^[\d,]+$/.test(rawCount) ? Number(rawCount.replace(/,/g, "")) : null;
     return {
       amount: explicit(cell, `${side}-amount`) || parts.find(part => !/\b(?:buys?|sells?|txns?|transactions?)\b/i.test(part)) || null,
+      tokenQuantity: explicit(cell, `${side}-token-quantity`) || Array.from(cell?.querySelectorAll("span, div") ?? [])
+        .map(node => value(node)?.match(/^((?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)[KMBT]?)\s*\/\s*[\d,]+$/i)?.[1]).find(Boolean) || null,
       count: Number.isSafeInteger(count) ? count : null
     };
   }
@@ -138,7 +187,7 @@
             fields.filter(field => field === "fees").length > 1) continue;
         const balance = cells[fields.indexOf("balance")];
         const currency = value(balance)?.match(/^(SOL|BNB|ETH)\s+Balance/i)?.[1].toUpperCase() ?? null;
-        return {fields, currency};
+        return {fields, currency, cells};
       }
     }
     // An incomplete/ambiguous header must not silently fall back to positional mapping.
@@ -178,13 +227,18 @@
     return symbols.size === 1 ? [...symbols][0] : symbols.size ? null : fallback;
   }
 
-  function extractRow(row, cells, schema) {
-    const walletAddress = publicAddress(cells.wallet);
+  function extractRow(row, cells, schema, context) {
+    const walletIdentity = publicAddress(cells.wallet), walletAddress = walletIdentity.address;
     const bought = trade(cells.bought, "buy");
     const sold = trade(cells.sold, "sell");
     const remainingParts = fragments(cells.remaining);
+    const percentageParts = remainingParts.filter(part => part.includes("%"));
     const remainingPercentage = explicit(cells.remaining, "remaining-percentage") ||
-      remainingParts.join(" ").match(/-?\d+(?:\.\d+)?\s*%/)?.[0] || null;
+      percentageParts.join(" ") || null;
+    const explicitQuantity = explicit(cells.remaining, "token-quantity");
+    const tokenQuantity = explicitQuantity && /^(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)[KMBT]?$/i.test(explicitQuantity) ? explicitQuantity : null;
+    const holdingValue = explicit(cells.remaining, "remaining-value") ||
+      remainingParts.find(part => /^[$€£]/.test(part) || /\b(?:USD|EUR|GBP|SOL|ETH|BNB)$/.test(part)) || null;
     const activityParts = [...fragments(cells.wallet), ...fragments(cells.balance)];
     const balanceCurrency = currency(cells.balance, schema?.currency ||
       (explicit(cells.balance, "sol-balance") !== null ? "SOL" : null));
@@ -195,7 +249,7 @@
       rank: value(cells.rank),
       walletDisplay: explicit(cells.wallet, "wallet") || fragments(cells.wallet)[0] || null,
       walletAddress,
-      identityStatus: walletAddress ? "resolved" : "unresolved",
+      identityStatus: walletIdentity.status,
       nativeBalance, balanceCurrency,
       // Retained for consumers of older Solana snapshots; EVM balances are never SOL.
       solBalance: balanceCurrency === "SOL" ? nativeBalance : null,
@@ -205,13 +259,22 @@
       boughtAmount: bought.amount,
       buyCount: bought.count,
       soldAmount: sold.amount,
+      boughtTokenQuantity: bought.tokenQuantity,
+      soldTokenQuantity: sold.tokenQuantity,
       sellCount: sold.count,
       unrealizedPnl: value(cells.pnl),
       feesPaid: explicit(cells.fees, "fees-paid") || fragments(cells.fees)[0] || null,
       feesPaidCurrency: currency(cells.fees),
-      remainingTokenValue: explicit(cells.remaining, "remaining-value") ||
-        remainingParts.find(part => !part.includes("%")) || null,
+      remainingTokenValue: holdingValue,
+      remainingValueCurrency: {"$": "USD", "€": "EUR", "£": "GBP"}[holdingValue?.[0]] || holdingValue?.match(/\b(USD|EUR|GBP|SOL|ETH|BNB)$/)?.[1] || null,
+      remainingDisplayText: value(cells.remaining),
       remainingPercentage,
+      // Only explicitly identified CURRENT token quantity. Never derive it from value or trades.
+      tokenQuantity,
+      tokenQuantitySource: tokenQuantity === null ? null : "explicit-dom-token-quantity",
+      percentageSource: "axiom-reported",
+      percentageDenominator: "Axiom-reported supply; definition unavailable",
+      classification: classify(cells.wallet, walletAddress, context),
       fundingSourceLabel: explicit(cells.funding, "funding-source") || value(fundingLink?.querySelector(".truncate")) ||
         fragments(cells.funding)[0] || null,
       fundingTransactionUrl: transactionUrl(cells.funding),
@@ -229,11 +292,15 @@
     };
   }
 
-  function extract(table) {
+  function extract(table, {context = null, observedAt = Date.now()} = {}) {
     if (!table) return {rows: [], unsupportedRows: 0, renderedLimitReached: false};
+    const metadata = tableMetadata(table);
+    if (metadata.activeTable.kind !== "holders") return {...metadata, rows: [], unsupportedRows: 0, renderedLimitReached: false};
+    const extractionId = `${observedAt}:${++extractionSequence}`;
     const schema = headerSchema(table);
     const possibleRows = Array.from(table.querySelectorAll('[style], [role="row"], [data-index]'))
       .filter(row => {
+        if (!visible(row)) return false;
         const height = parseFloat(row.style.height);
         return row.getAttribute("role") === "row" ||
           (row.style.position === "absolute" && (row.style.top || row.style.transform) &&
@@ -255,16 +322,18 @@
         if (row.getAttribute("role") !== "row" || !row.querySelector('[role="columnheader"]')) unsupportedRows++;
         continue;
       }
-      rows.push(extractRow(row, cells, schema));
+      rows.push({...extractRow(row, cells, schema, context), observedAt, extractionId, tokenContext: context});
     }
     const currencies = new Set(rows.map(row => row.balanceCurrency).filter(Boolean));
-    return {rows, unsupportedRows, renderedLimitReached: candidates.length > MAX_RENDERED_ROWS,
+    return {...metadata, extractedAt: observedAt, extractionId, context, rows, unsupportedRows, renderedLimitReached: candidates.length > MAX_RENDERED_ROWS,
       balanceCurrency: currencies.size === 1 ? [...currencies][0] : rows.length ? null : schema?.currency ?? null,
       hasFeesPaid: Boolean(schema?.fields?.includes("fees") || rows.some(row => row.feesPaid !== null))};
   }
 
   function createMonitor(onChange) {
     let tokenKey = null;
+    let sessionKey = null;
+    let context = null;
     let active = false;
     let totalReported = null;
     let table = null;
@@ -288,14 +357,14 @@
     function update() {
       timer = null;
       const hidden = table && (!table.getClientRects().length || table.closest('[hidden], [aria-hidden="true"]'));
-      let result = active && table && !hidden ? extract(table) : {rows: [], unsupportedRows: 0, renderedLimitReached: false};
+      let result = active && table && !hidden ? extract(table, {context}) : {rows: [], unsupportedRows: 0, renderedLimitReached: false};
       // SPA navigation can change the URL before replacing the previous token's rows.
       const awaitingToken = previousTokenRows !== null && table &&
-        JSON.stringify(result.rows) === previousTokenRows;
+        JSON.stringify(transitionRows(result.rows)) === previousTokenRows;
       if (awaitingToken) result = {...result, rows: []};
       else if (result.rows.length) {
         previousTokenRows = null;
-        lastRenderedFingerprint = JSON.stringify(result.rows);
+        lastRenderedFingerprint = JSON.stringify(transitionRows(result.rows));
       }
       const uniqueRendered = new Map();
       const rows = [];
@@ -318,8 +387,13 @@
         rows.push(row);
       }
       const next = {
-        tokenKey, totalReported,
+        tokenKey, totalReported, context,
+        extractedAt: awaitingToken ? null : result.extractedAt ?? null,
+        extractionId: awaitingToken ? null : result.extractionId ?? null,
+        activeTable: result.activeTable ?? {kind: "unknown", source: null},
+        sort: result.sort ?? {column: null, direction: null, label: "Sort order unknown", source: null},
         tableStatus: !active ? "inactive" : !table ? "unavailable" : hidden ? "hidden" :
+          result.activeTable?.kind === "top-traders" ? "other-view" : result.activeTable?.kind === "unknown" ? "unknown-view" :
           awaitingToken ? "awaiting-token" : result.unsupportedRows ? "unsupported" : rows.length ? "available" : "empty",
         renderedHolders: rows.length,
         renderedBundlers: rows.filter(row => row.axiomBundler).length,
@@ -332,12 +406,17 @@
         renderedLimitReached: result.renderedLimitReached,
         balanceCurrency: result.balanceCurrency ?? null,
         hasFeesPaid: result.hasFeesPaid ?? false,
+        duplicateRows: result.rows.length - rows.length,
+        rawRows: result.rows,
+        sessionOldestObservedAt: observed.size ? Math.min(...[...observed.values()].map(row => row.observedAt)) : null,
+        sessionNewestObservedAt: observed.size ? Math.max(...[...observed.values()].map(row => row.observedAt)) : null,
         rows
       };
-      const nextFingerprint = JSON.stringify(next);
+      const nextFingerprint = JSON.stringify({...next, extractedAt: undefined, extractionId: undefined,
+        sessionOldestObservedAt: undefined, sessionNewestObservedAt: undefined, rows: dataRows(rows), rawRows: dataRows(result.rows)});
+      state = next; // A real reread can refresh current rows without a changed-values callback.
       if (nextFingerprint === fingerprint) return;
       fingerprint = nextFingerprint;
-      state = next;
       onChange?.(state);
     }
 
@@ -347,7 +426,9 @@
     }
 
     function refresh() {
-      const nextTable = active ? document.querySelector(TABLE_SELECTOR) : null;
+      const holders = active ? Array.from(document.querySelectorAll(TABLE_SELECTOR)) : [];
+      const nextTable = active ? holders.find(visible) ??
+        Array.from(document.querySelectorAll('[data-perf-id^="token-table-"]')).find(visible) ?? holders[0] ?? null : null;
       if (nextTable !== table) {
         disconnectTable();
         table = nextTable;
@@ -361,8 +442,10 @@
     }
 
     return {
-      setContext(nextTokenKey, reported, nextActive = true) {
-        if (nextTokenKey !== tokenKey) {
+      setContext(nextTokenKey, reported, nextActive = true, nextContext = null) {
+        const nextSessionKey = nextContext?.sourceKey ?? nextTokenKey;
+        context = nextContext;
+        if (nextSessionKey !== sessionKey) {
           if (tokenKey !== null) previousTokenRows = lastRenderedFingerprint || previousTokenRows;
           lastRenderedFingerprint = null;
           disconnectTable();
@@ -370,6 +453,7 @@
           cacheTruncated = false;
           fingerprint = "";
           tokenKey = nextTokenKey;
+          sessionKey = nextSessionKey;
           active = nextActive;
         } else if (nextActive !== active) {
           disconnectTable();
@@ -386,5 +470,7 @@
     };
   }
 
-  globalThis.AxiomHolderTableExtractor = Object.freeze({extract, createMonitor, TABLE_SELECTOR});
+  const api = {extract, createMonitor, tableMetadata, isAddress, addressKey, TABLE_SELECTOR};
+  globalThis.AxiomHolderTableExtractor = Object.freeze(api);
+  if (typeof module !== "undefined") module.exports = api;
 })();

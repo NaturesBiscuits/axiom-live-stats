@@ -33,8 +33,9 @@ After changing extension files, click **Reload** on `chrome://extensions`, then 
 ## Architecture
 
 - `holderTableExtractor.js`: Extracts only the scoped Holders table, observes row mutations, and retains up to 1,000 full-address session observations.
+- `holderConcentration.js`: Validates one current extraction, deduplicates full addresses, checks percentage totals and sort/leading-set evidence, and applies explicit supported pool exclusions without renormalizing supply.
 - `tokenContextDetector.js`: Reads public token/pool DOM hints and recognized URL identity parameters; keeps untyped route addresses separate from mint and pool hints.
-- `content.js`: Reads market DOM text and sends a roughly 3-second heartbeat. Holder-only changes reuse the last market reading without rescanning the document. Holder sessions use pathname plus recognized identity query parameters.
+- `content.js`: Reads market DOM text and sends a roughly 3-second heartbeat. Holder-only changes reuse the last market reading without rescanning the document. Holder sessions use recognized route identity plus detected network/mint/pool context.
 - `rollingChartCollector.js`: Small/subscript price parsing, independent clocks, one-second slots, bounded histories, null gaps, merges and exports.
 - `liveValueObserver.js`: Cached cells and reused MutationObserver; successful unchanged reads renew DOM readability without changing the numeric-change time.
 - `liquidityHistory.js`: Independent five-second attempts, displayed amount parsing, explicit identity/status, window baselines and coverage math.
@@ -50,9 +51,9 @@ After changing extension files, click **Reload** on `chrome://extensions`, then 
 Read-only extension. Local market statistics, holders and liquidity/price observations come from Axiom's rendered DOM without external API calls. The existing optional historical-price view calls GeckoTerminal only on explicit request. Neither feature needs Axiom credentials, wallet access, network interception, screenshots or session tokens. Token identity uses a whitelist of chain/network/mint/pool query parameters; unrelated query parameters are not collected. Actual chart sampling attempts persist locally in IndexedDB with bounded age/count retention. No machine learning or automated trading is included.
 
 
-## Top 10 Holders (Axiom)
+## Top 10 Holders — Axiom-reported
 
-The **Top 10 Holders (Axiom)** market card reads the percentage displayed above Axiom's exact **Top 10 H.** label in its Token Info tile, including the supplied icon/value/label layout. For example, `14.05%` is preserved as displayed and sent as `stats.top10Holders` through the existing snapshot flow. It is Axiom-reported holder concentration, not a percentage calculated from the extension's partial holder table. Valid `0%` is retained; missing, hidden, malformed or out-of-range values display `—`. Reads stay scoped to the matching tile, so nearby Bundlers percentages are not substituted. The browser fixture in `tests/fixtures/top-ten-holders.html` covers the supplied markup and regression checks cover value updates, zero, invalid/hidden states and dashboard clearing. Reload the extension and refresh Axiom/dashboard to enable the card, then compare it with the live Top 10 H. tile.
+The **Top 10 Holders — Axiom-reported** market card reads the percentage displayed above Axiom's exact **Top 10 H.** label in its Token Info tile, including the supplied icon/value/label layout. For example, `14.05%` is preserved as displayed and sent as `stats.top10Holders` through the existing snapshot flow. It is Axiom-reported holder concentration, not a percentage calculated from the extension's partial holder table. Valid `0%` is retained; missing, hidden, malformed or out-of-range values display `—`. Reads stay scoped to the matching tile, so nearby Bundlers percentages are not substituted. The browser fixture in `tests/fixtures/top-ten-holders.html` covers the supplied markup and regression checks cover value updates, zero, invalid/hidden states and dashboard clearing. Reload the extension and refresh Axiom/dashboard to enable the card, then compare it with the live Top 10 H. tile.
 
 ## Bundlers % (v0.2)
 
@@ -62,6 +63,16 @@ on-chain Jito bundles or an identification of individual bundled wallets.
 If Axiom has not rendered this tile, the dashboard displays —.
 
 ## Holders Intelligence (Phase 1)
+
+### Holder concentration and data sources
+
+**Top 10 Holders — Axiom-reported** remains separate from calculations using the current table. The concentration panel shows source, actual extraction time, network/token context, active view, sort, identifiable and unresolved counts, duplicate rows, partial coverage and session-cache truncation. An explicit Remaining-descending sort and a complete valid leading set can support **Top 1/5/10 — Axiom table order**; otherwise results are **Largest 1/5/10 observed wallets — partial coverage**, or unavailable with a reason. The supplied captures expose no reliable sort direction, so **Sort order unknown** is expected for them.
+
+Native SOL/ETH/BNB balance, displayed holding value and Axiom supply percentage are distinct fields. Current token quantity is collected only when explicitly exposed, never inferred from dollars or Bought/Sold history. Rows carry actual extraction time and context; republished snapshots do not renew them. Mixed-age/context or older-than-10-second extractions are unavailable. Session observations never fill current rankings. Percentage sums are approximate and retain Axiom's original, otherwise unspecified supply denominator.
+
+Classifications default to unknown; names/icons alone do not prove pools, burns, lockers or contracts. Optional supported Axiom-reported pool exclusions validate the evidence contents and list the full addresses, evidence and reasons without changing the denominator. Hidden rows and contradictory full-address hints do not enter current identifiable-wallet calculations. Duplicate rank numbers cannot establish a Top 1 result, and holder data must match the dashboard's active token context. No classification or ranking is presented as independent on-chain verification. See [HOLDER_CONCENTRATION.md](HOLDER_CONCENTRATION.md) for the field audit, exact eligibility rules, classification sources, missing live HTML, independent API capability requirements and regression/manual checks.
+
+### Holder table extraction
 
 Open the **Holders** tab on the Axiom token page. The new dashboard section appears beneath the existing market cards. It reports Axiom's total holder count, the currently rendered rows, Axiom-flagged bundlers **among those rows only**, address-resolved session observations, and coverage status. The scrollable dashboard table shows the currently rendered rows, including nearby virtualized rows, rather than a full holder list.
 

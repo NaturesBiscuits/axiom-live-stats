@@ -6,6 +6,8 @@
   <title>Axiom Live Stats</title>
   <link rel="stylesheet" href="dashboard.css" />
   <script src="rollingChartCollector.js" defer></script>
+  <script src="holderTableExtractor.js" defer></script>
+  <script src="holderConcentration.js" defer></script>
   <script src="vendor/lightweight-charts.standalone.production.js" defer></script>
   <script src="chartView.js" defer></script>
   <script src="liquidityHistory.js" defer></script>
@@ -37,7 +39,7 @@
       <article class="card"><div class="label">Net Volume</div><div class="value" id="netVolume">—</div></article>
       <article class="card"><div class="label">Holders</div><div class="value" id="holders">—</div></article>
       <article class="card"><div class="label">Bundlers (Axiom)</div><div class="value" id="bundlers">—</div></article>
-      <article class="card"><div class="label">Top 10 Holders (Axiom)</div><div class="value" id="top10Holders">—</div></article>
+      <article class="card"><div class="label">Top 10 Holders — Axiom-reported</div><div class="value" id="top10Holders">—</div><p class="card-note" id="top10HoldersObservedAt">Observation time unavailable</p></article>
     </section>
     <section class="chart-collector liquidity-history" aria-labelledby="liquidityHeading">
       <div class="section-heading"><h2 id="liquidityHeading">Liquidity history</h2><span class="source-tag">Axiom-reported liquidity</span></div>
@@ -60,6 +62,15 @@
         <span class="source-tag">Axiom classification</span>
       </div>
       <p class="section-note">Axiom's table is virtualized: only rendered rows are available. Open the Holders tab on Axiom to monitor them; this extension never scrolls the source page.</p>
+      <div class="holder-concentration" aria-label="Holder concentration from current rows">
+        <p id="concentrationContext" class="section-note">Waiting for a current holder extraction.</p>
+        <p id="concentrationCoverage" class="section-note"></p>
+        <label class="section-note"><input id="excludeHolderPools" type="checkbox"> Exclude supported Axiom-reported pool entries (supply denominator unchanged)</label>
+        <div class="holder-summary" id="concentrationResults"></div>
+        <p id="concentrationDenominator" class="section-note"></p>
+        <ul id="concentrationExcluded" class="section-note"></ul>
+        <p class="section-note">Current rows only. Session history is never used to fill rankings. Approximate sums use Axiom's displayed supply percentages; native balances and dollar values are not token quantities. DOM data does not establish independent on-chain verification. An unknown classification is included unless supported exclusion evidence exists.</p>
+      </div>
       <div class="holder-summary">
         <article class="card"><div class="label">Total holders · Axiom reported</div><div class="value" id="holderTotal">—</div><p class="card-note">Reported count, not extracted rows</p></article>
         <article class="card"><div class="label">Currently rendered holders</div><div class="value" id="holderRendered">—</div><p class="card-note">DOM observations only</p></article>
@@ -74,7 +85,7 @@
           <thead><tr>
             <th scope="col">Rank</th><th scope="col">Wallet / identity</th><th scope="col" id="holderBalanceHeader">Native balance</th>
             <th scope="col">Last active</th><th scope="col">Bought / buys</th><th scope="col">Sold / sells</th>
-            <th scope="col">Unrealized PnL</th><th scope="col" id="holderFeesHeader" hidden>Fees paid</th><th scope="col">Remaining / %</th><th scope="col">Funding</th>
+            <th scope="col">Unrealized PnL</th><th scope="col" id="holderFeesHeader" hidden>Fees paid</th><th scope="col">Token holding value / supply %</th><th scope="col">Funding</th>
             <th scope="col">Held</th><th scope="col">Axiom Bundler</th>
           </tr></thead>
           <tbody id="holderRows"><tr><td colspan="11" class="empty-holders">Holder rows are not available yet.</td></tr></tbody>

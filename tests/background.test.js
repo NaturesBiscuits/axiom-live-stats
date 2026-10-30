@@ -112,6 +112,19 @@ test("background remains compatible with market-only snapshots", async () => {
   assert.equal(instance.created.length, 1);
 });
 
+test("republished snapshots preserve independent holder and market extraction timestamps", async () => {
+  const instance = worker(), observedAt = instance.now();
+  const snapshot = {url: "https://axiom.trade/meme/token-a", capturedAt: observedAt, marketObservedAt: observedAt, stats: {top10Holders: "14.05%"},
+    holdersIntelligence: {extractedAt: observedAt, extractionId: "original", rows: [{observedAt}]}};
+  instance.send({type: "AXIOM_STATS_UPDATE", snapshot}, {tab: {id: 42}, url: snapshot.url}); await flush();
+  instance.advance(20000);
+  instance.send({type: "AXIOM_STATS_UPDATE", snapshot: {...snapshot, capturedAt: instance.now()}}, {tab: {id: 42}, url: snapshot.url}); await flush();
+  assert.equal(instance.stored.latestSnapshot.capturedAt, instance.now());
+  assert.equal(instance.stored.latestSnapshot.marketObservedAt, observedAt);
+  assert.equal(instance.stored.latestSnapshot.holdersIntelligence.extractedAt, observedAt);
+  assert.equal(instance.stored.latestSnapshot.holdersIntelligence.rows[0].observedAt, observedAt);
+});
+
 const chartSender = {tab: {id: 42}, url: "https://axiom.trade/meme/token-a"};
 function packetAt(at, key = "token-a", value = 1) {
   const model = require("../rollingChartCollector.js").createStore({now: () => at});

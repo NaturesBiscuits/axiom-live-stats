@@ -8,6 +8,7 @@
   const fixture = document.getElementById("fixture");
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  const rowValues = rows => JSON.stringify(rows, (key, value) => ["observedAt", "extractionId", "tokenContext"].includes(key) ? undefined : value);
   const test = async (name, fn) => {
     document.getElementById("results").textContent = JSON.stringify({passed: results.length, running: name});
     await fn();
@@ -155,7 +156,7 @@
         else wrapper.className = "align-sub";
         digits.textContent = sub.textContent; wrapper.appendChild(digits); sub.replaceWith(wrapper);
       }
-      assert(JSON.stringify(AxiomHolderTableExtractor.extract(table).rows) === JSON.stringify(before), "CSS digit wrappers must not become standalone balances, fees or Remaining fields");
+      assert(rowValues(AxiomHolderTableExtractor.extract(table).rows) === rowValues(before), "CSS digit wrappers must not become standalone balances, fees or Remaining fields");
     });
     await test("Incomplete headers reject positional fallback, and case-insensitive headers preserve reordered fields", async () => {
       let table = await capturedTable("bnb");
@@ -168,7 +169,7 @@
       }
       const walletLabel = [...table.firstElementChild.querySelectorAll("span")].find(node => node.textContent === "Wallet");
       walletLabel.textContent = "WALLET";
-      assert(JSON.stringify(AxiomHolderTableExtractor.extract(table).rows) === JSON.stringify(before), "Uppercase header still maps Funding/Held by name");
+      assert(rowValues(AxiomHolderTableExtractor.extract(table).rows) === rowValues(before), "Uppercase header still maps Funding/Held by name");
       table = await capturedTable("bnb");
       const boughtLabel = [...table.firstElementChild.querySelectorAll("span")].find(node => /^Bought\b/.test(node.textContent));
       boughtLabel.textContent = "Unknown trade column";
@@ -206,7 +207,7 @@
         const cells = Array.from(container.children).filter(cell => !cell.classList.contains("w-0"));
         container.insertBefore(cells[7], cells[6]);
       }
-      assert(JSON.stringify(AxiomHolderTableExtractor.extract(table).rows) === JSON.stringify(before), "Header order maps fields instead of fixed offsets");
+      assert(rowValues(AxiomHolderTableExtractor.extract(table).rows) === rowValues(before), "Header order maps fields instead of fixed offsets");
       const heldHeader = Array.from(table.firstElementChild.querySelectorAll("span")).find(node => node.textContent === "Held");
       heldHeader.textContent = "Unknown duration";
       assert(AxiomHolderTableExtractor.extract(table).unsupportedRows === 2, "An unrecognized required header never falls back to guessed offsets");
@@ -320,6 +321,96 @@
       assert(table.scrollTop === 0 && window.scrollY === 0, "No automatic scroll");
       monitor.disconnect();
     });
+    await test("Supplied captures expose native balance/value/percentage separately and do not expose sort or verified classifications", async () => {
+      for (const name of ["sol", "bnb", "eth"]) {
+        const result = AxiomHolderTableExtractor.extract(await capturedTable(name));
+        assert(result.activeTable.kind === "holders" && result.sort.label === "Sort order unknown", "Table marker identifies Holders; empty sort buttons prove no direction");
+        assert(result.rows.every(row => row.tokenQuantity === null && row.remainingTokenValue?.startsWith("$") && row.remainingValueCurrency === "USD"), "Dollars are holding values, never token quantities");
+        assert(result.rows.every(row => row.classification.category === "unknown" && row.classification.verificationStatus === "unverified"), "Names/icons alone cannot establish pools or contracts");
+      }
+    });
+    await test("Hidden DOM rows do not enter current holder extraction or the session cache", () => {
+      for (const hide of [row => row.hidden = true, row => row.setAttribute("aria-hidden", "true"),
+        row => row.style.display = "none", row => row.style.visibility = "hidden"]) {
+        const table = makeTable(rowHtml(addressA) + rowHtml(addressB, false, 2)); hide(table.firstElementChild);
+        const rows = AxiomHolderTableExtractor.extract(table).rows;
+        assert(rows.length === 1 && rows[0].walletAddress === addressB, "Only the available rendered row may contribute");
+        const m = AxiomHolderTableExtractor.createMonitor(); m.setContext("hidden-rows", 100);
+        assert(m.getState().observedHolders === 1 && m.getState().renderedHolders === 1, "Hidden entries are not cached as current observations");
+        m.disconnect();
+      }
+    });
+    await test("Conflicting full address hints stay unresolved instead of selecting the first address", () => {
+      const table = makeTable(rowHtml(addressA));
+      const wallet = table.firstElementChild.firstElementChild.children[1];
+      wallet.dataset.walletAddress = addressB;
+      let row = AxiomHolderTableExtractor.extract(table).rows[0];
+      assert(row.walletAddress === null && row.identityStatus === "conflicting", "Contradictory full-address evidence cannot become one wallet");
+      const m = AxiomHolderTableExtractor.createMonitor(); m.setContext("identity-conflict", 100);
+      assert(m.getState().observedHolders === 0 && m.getState().unresolvedRendered === 1, "Conflicting identities are not session cache keys");
+      m.disconnect(); wallet.dataset.walletAddress = addressA;
+      row = AxiomHolderTableExtractor.extract(table).rows[0];
+      assert(row.walletAddress === addressA && row.identityStatus === "resolved", "Repeated consistent address evidence is accepted once");
+    });
+    await test("Active Top Traders views cannot reuse Holders rows; only explicit header sort is captured", async () => {
+      const table = await capturedTable("sol");
+      const selected = document.createElement("button"); selected.setAttribute("role", "tab"); selected.setAttribute("aria-selected", "true"); selected.textContent = "Top Traders";
+      fixture.prepend(selected);
+      let result = AxiomHolderTableExtractor.extract(table);
+      assert(result.rows.length === 0 && result.activeTable.kind === "top-traders", "Selected Top Traders suppresses old holder rows");
+      const m = AxiomHolderTableExtractor.createMonitor(); m.setContext("view-token", 2);
+      assert(m.getState().tableStatus === "other-view", "Other-view reason propagates through the monitor");
+      selected.textContent = "Holders";
+      const remaining = [...table.firstElementChild.children].find(node => node.textContent === "Remaining");
+      remaining.setAttribute("aria-sort", "descending");
+      result = AxiomHolderTableExtractor.extract(table);
+      assert(result.sort.column === "remaining" && result.sort.direction === "descending", "Explicit captured header structure supports ARIA sort when exposed");
+      remaining.setAttribute("aria-sort", "ascending");
+      assert(AxiomHolderTableExtractor.extract(table).sort.direction === "ascending", "Incorrect direction stays explicit");
+      remaining.removeAttribute("aria-sort");
+      assert(AxiomHolderTableExtractor.extract(table).sort.column === null, "Missing direction returns unknown");
+      selected.remove(); table.setAttribute("data-perf-id", "token-table-top-traders");
+      assert(AxiomHolderTableExtractor.extract(table).rows.length === 0, "Top Traders marker is never parsed as holder data");
+      const hiddenHolders = document.createElement("div"); hiddenHolders.dataset.perfId = "token-table-holders"; hiddenHolders.hidden = true; fixture.prepend(hiddenHolders);
+      m.setContext("view-token", 2);
+      assert(m.getState().tableStatus === "other-view", "A hidden cached holder table cannot obscure the visible other view");
+      m.disconnect();
+    });
+    await test("Explicit classifications and quantities are sourced, while malformed percentages and dollar quantities remain invalid", () => {
+      const table = makeTable(rowHtml(addressA));
+      const context = {sourceKey: "classification-token", blockchain: "solana", mintAddress: addressB, poolAddress: addressA};
+      let result = AxiomHolderTableExtractor.extract(table, {context});
+      assert(result.rows[0].classification.category === "pool" && result.rows[0].classification.verificationStatus === "axiom-reported", "Full address matching an explicit Axiom pool hint can support a reported pool classification");
+      const wallet = table.firstElementChild.firstElementChild.children[1];
+      const badge = document.createElement("span"); badge.dataset.field = "wallet-classification"; wallet.appendChild(badge);
+      for (const [text, category] of [["Pool", "pool"], ["Burn destination", "burn"], ["Locker", "locker"], ["Other known contract", "other-contract"]]) {
+        badge.textContent = text;
+        assert(AxiomHolderTableExtractor.extract(table).rows[0].classification.category === category, "Only an explicit semantic classification field establishes the reported category");
+      }
+      const remaining = table.firstElementChild.firstElementChild.children[6];
+      remaining.innerHTML = '<span>$380</span><span data-field="token-quantity">150K</span><span>1.2.3%</span>';
+      result = AxiomHolderTableExtractor.extract(table);
+      assert(result.rows[0].tokenQuantity === "150K" && result.rows[0].remainingTokenValue === "$380", "Explicit current quantity remains separate from value");
+      assert(AxiomHolderConcentration.percentage(result.rows[0].remainingPercentage) === null, "Malformed percentages are not substring-salvaged");
+      remaining.querySelector('[data-field="token-quantity"]').textContent = "$380";
+      assert(AxiomHolderTableExtractor.extract(table).rows[0].tokenQuantity === null, "A dollar field cannot become token quantity");
+    });
+    await test("Actual extraction times refresh only current rows; cached session ages and same-route token guards remain separate", async () => {
+      const table = makeTable(rowHtml(addressA));
+      const context = {sourceKey: "time-token-a", blockchain: "solana", mintAddress: addressB, poolAddress: null};
+      const m = AxiomHolderTableExtractor.createMonitor(); m.setContext("same-route", 100, true, context);
+      const first = m.getState(), copiedAt = first.rows[0].observedAt;
+      assert(first.extractedAt === copiedAt && first.rows[0].tokenContext.sourceKey === context.sourceKey, "Rows carry actual extraction time and network/token context");
+      const republished = {...first, capturedAt: copiedAt + 60000};
+      assert(republished.rows[0].observedAt === copiedAt, "Republishing never refreshes row time");
+      table.innerHTML = rowHtml(addressB, true, 2); await pause(220);
+      const next = m.getState();
+      assert(next.observedHolders === 2 && next.rows.length === 1 && next.rows[0].observedAt > copiedAt, "Current rows refresh while session count retains older observations");
+      assert(next.sessionOldestObservedAt === copiedAt && next.sessionNewestObservedAt === next.extractedAt, "Session observation range remains mixed-age and explicit");
+      m.setContext("same-route", 100, true, {...context, sourceKey: "time-token-b", mintAddress: addressA});
+      assert(m.getState().tableStatus === "awaiting-token" && m.getState().observedHolders === 0, "Network/token context changes reset and guard even on the same route");
+      m.disconnect();
+    });
     let sent = [];
     let dashboardFixture;
     const statsMessages = () => sent.filter(message => message.type === "AXIOM_STATS_UPDATE");
@@ -370,6 +461,15 @@
       document.querySelectorAll = original;
       assert(scans === 0, "No document-wide market scan for holder mutation");
       assert(statsMessages().length === before + 1 && statsMessages().at(-1).snapshot.holdersIntelligence.renderedBundlers === 0, "Changed holder snapshot published once");
+    });
+    await test("Selected-view attribute changes propagate without changing holder row markup", async () => {
+      const tab = document.createElement("button"); tab.setAttribute("role", "tab"); tab.textContent = "Top Traders";
+      document.getElementById("market").appendChild(tab);
+      tab.setAttribute("aria-selected", "true"); await pause(560);
+      assert(statsMessages().at(-1).snapshot.holdersIntelligence.tableStatus === "other-view", "Selection-only changes clear current holder results");
+      tab.setAttribute("aria-selected", "false"); await pause(560);
+      assert(statsMessages().at(-1).snapshot.holdersIntelligence.tableStatus === "available", "Returning to Holders restores current extraction");
+      tab.remove();
     });
     await test("Price mutations feed the sampler while unchanged polling and one-second ticks never scan all spans", async () => {
       const priceLabel = [...document.getElementById("market").querySelectorAll("span")].find(node => node.textContent === "Price");
@@ -439,6 +539,8 @@
       const dispatchStorage = changes => listeners.forEach(listener => listener(changes, "session"));
       dashboardFixture = {doc, win: iframe.contentWindow, dispatchStorage, runtimeListeners};
       await loadScript(doc, new URL("../rollingChartCollector.js", location.href).href);
+      await loadScript(doc, new URL("../holderTableExtractor.js", location.href).href);
+      await loadScript(doc, new URL("../holderConcentration.js", location.href).href);
       await loadScript(doc, new URL("../vendor/lightweight-charts.standalone.production.js", location.href).href);
       await loadScript(doc, new URL("../chartView.js", location.href).href);
       await loadScript(doc, new URL("../liquidityHistory.js", location.href).href);
@@ -476,6 +578,30 @@
       dispatchStorage({latestSnapshot: {newValue: {...snapshot, stats: {...snapshot.stats, top10Holders: null}}}});
       assert(doc.getElementById("top10Holders").textContent === "—", "Unavailable top-holder data clears the dashboard value");
       window.dispatchEvent(new Event("pagehide"));
+    });
+    await test("Concentration dashboard separates Axiom-reported values, partial sums, exclusions, sort and session coverage", () => {
+      const {doc, win, dispatchStorage} = dashboardFixture;
+      const context = {sourceKey: "concentration-ui", blockchain: "solana", mintAddress: addressB, poolAddress: addressA};
+      const table = makeTable(rowHtml(addressA));
+      const extracted = AxiomHolderTableExtractor.extract(table, {context});
+      const snapshot = {url: "https://axiom.trade/meme/concentration-ui", tokenKey: "concentration-ui", capturedAt: Date.now(), marketObservedAt: Date.now(), stats: {top10Holders: "14.05%"},
+        holdersIntelligence: {...extracted, rawRows: extracted.rows, tokenKey: "concentration-ui", tableStatus: "available", observedHolders: 1000, cacheLimit: 1000, cacheTruncated: true,
+          renderedHolders: 1, renderedBundlers: 1, unresolvedRendered: 0, coverage: "partial-virtualized"}};
+      dispatchStorage({latestSnapshot: {newValue: snapshot}});
+      assert(doc.getElementById("top10Holders").textContent === "14.05%", "Axiom-reported Top 10 is a separate metric");
+      assert(doc.getElementById("concentrationResults").textContent.includes("Largest 1 observed wallets") && doc.getElementById("concentrationResults").textContent.includes("1.2%"), "Unknown sorting yields only a partial observed subset");
+      assert(doc.getElementById("concentrationContext").textContent.includes("Sort order unknown") && doc.getElementById("concentrationCoverage").textContent.includes("truncated"), "Sorting, extraction context and cache limits remain near results");
+      const exclusion = doc.getElementById("excludeHolderPools"); exclusion.checked = true; exclusion.dispatchEvent(new win.Event("change"));
+      assert(doc.getElementById("concentrationExcluded").textContent.includes(addressA) && doc.getElementById("concentrationDenominator").textContent.includes("unchanged by exclusions"), "Pool exclusion lists its address/reason without changing denominator");
+      assert(doc.getElementById("concentrationResults").textContent.includes("only 0 available"), "Exclusions account for the required wallet count");
+      exclusion.checked = false; exclusion.dispatchEvent(new win.Event("change"));
+      snapshot.holdersIntelligence.extractedAt -= 20000;
+      dispatchStorage({latestSnapshot: {newValue: snapshot}});
+      assert(!doc.getElementById("concentrationResults").textContent.includes("≈") && doc.getElementById("concentrationResults").textContent.includes("older than 10 seconds"), "Recently republished stale data cannot become a current sum");
+      assert(doc.getElementById("top10Holders").textContent === "14.05%", "Calculated unavailability does not replace the reported percentage");
+      const changedContext = {...context, sourceKey: "different-token-same-route", mintAddress: addressA};
+      dispatchStorage({latestSnapshot: {newValue: {...snapshot, chartContext: changedContext}}});
+      assert(doc.querySelector(".empty-holders") && doc.getElementById("concentrationResults").textContent.includes("Unavailable"), "A new token context on the same route cannot reuse old holder rows");
     });
     await test("Liquidity dashboard renders short saved history without a live connection, isolates currencies and breaks missed periods", () => {
       const {doc, win, runtimeListeners} = dashboardFixture;

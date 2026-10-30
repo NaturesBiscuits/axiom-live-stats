@@ -5,6 +5,40 @@ const fields = [
 ];
 let lastSeenAt = null;
 let lastHolderFingerprint = "";
+let currentHolderData = null;
+const holderTime = at => Number.isFinite(at) ? new Date(at).toISOString() : "Unavailable";
+
+function renderConcentration() {
+  const data = currentHolderData;
+  const result = AxiomHolderConcentration.analyze(data, {excludePools: document.getElementById("excludeHolderPools").checked});
+  const context = data?.context;
+  const sort = data?.sort?.column ? `${data.sort.label} · ${data.sort.direction} (${data.sort.source})` : "Sort order unknown";
+  document.getElementById("concentrationContext").textContent = `${result.source} · observed ${holderTime(result.observedAt)} · ` +
+    `${context?.blockchain ?? "Network unresolved"} · mint ${context?.mintAddress ?? "unresolved"} · route hint ${context?.routeAddress ?? context?.routeKey ?? "unresolved"} · ` +
+    `view ${data?.activeTable?.kind ?? "unknown"} · ${sort}`;
+  document.getElementById("concentrationCoverage").textContent = `${result.identifiableWallets} current identifiable wallets · ${result.unresolvedRows} unresolved rows · ` +
+    `${result.duplicateRows} duplicate DOM rows · ${data?.unsupportedRows ?? 0} unsupported · partial virtualized coverage. ` +
+    `Separate session cache: ${data?.observedHolders ?? 0}/${data?.cacheLimit ?? 1000} retained identities${data?.cacheTruncated ? " · truncated" : ""}; ` +
+    `observations ${holderTime(data?.sessionOldestObservedAt)} to ${holderTime(data?.sessionNewestObservedAt)}. Matching the reported count does not establish completeness.`;
+  const fragment = document.createDocumentFragment();
+  for (const entry of result.results) {
+    const card = document.createElement("article"); card.className = "card";
+    const label = document.createElement("div"); label.className = "label"; label.textContent = entry.label;
+    const amount = document.createElement("div"); amount.className = "value";
+    amount.textContent = entry.percentage === null ? "Unavailable" : `≈ ${Number(entry.percentage.toPrecision(12))}%`;
+    const reason = document.createElement("p"); reason.className = "card-note"; reason.textContent = entry.reason;
+    card.append(label, amount, reason); fragment.appendChild(card);
+  }
+  document.getElementById("concentrationResults").replaceChildren(fragment);
+  document.getElementById("concentrationDenominator").textContent = `Percentage denominator: ${result.denominator}. Excluded addresses: ${result.excluded.length}.`;
+  const excluded = document.getElementById("concentrationExcluded");
+  excluded.replaceChildren(...result.excluded.map(entry => {
+    const item = document.createElement("li");
+    const evidence = entry.evidence.map(item => item.kind === "pool-address-match" ? `Axiom pool address ${item.address}` : `Axiom classification: ${item.text}`).join("; ");
+    item.textContent = `${entry.address} · ${entry.percentage} · ${entry.reason} · source ${entry.source} · ${evidence}`;
+    return item;
+  }));
+}
 
 function cell(text, className) {
   const node = document.createElement("td");
@@ -21,8 +55,14 @@ function secondary(node, text, className = "cell-secondary") {
 }
 
 function renderHolders(snapshot) {
-  const data = snapshot.holdersIntelligence?.tokenKey === (snapshot.tokenKey || snapshot.url) ? snapshot.holdersIntelligence : null;
-  const fingerprint = JSON.stringify({url: snapshot.url, reported: snapshot.stats.holders, data});
+  const candidate = snapshot.holdersIntelligence;
+  const contextMatches = !snapshot.chartContext?.sourceKey || ["sourceKey", "blockchain", "mintAddress", "poolAddress", "routeAddress", "routeKey"]
+    .every(field => (candidate?.context?.[field] ?? null) === (snapshot.chartContext[field] ?? null));
+  const data = candidate?.tokenKey === (snapshot.tokenKey || snapshot.url) && contextMatches ? candidate : null;
+  currentHolderData = data;
+  renderConcentration();
+  const fingerprint = JSON.stringify({url: snapshot.url, reported: snapshot.stats.holders, data}, (key, value) =>
+    ["observedAt", "extractedAt", "extractionId", "rawRows", "sessionOldestObservedAt", "sessionNewestObservedAt"].includes(key) ? undefined : value);
   if (fingerprint === lastHolderFingerprint) return;
   lastHolderFingerprint = fingerprint;
   document.getElementById("holderTotal").textContent = data?.totalReported?.toLocaleString() ?? snapshot.stats.holders ?? "—";
@@ -41,6 +81,8 @@ function renderHolders(snapshot) {
     empty: "Holders table is present, but no holder rows are currently rendered.",
     unsupported: "Some rendered rows could not be read. Axiom's row layout needs further HTML inspection.",
     "awaiting-token": "Waiting for the Holders table to update for the selected token.",
+    "other-view": "Top Traders or another view is active. Open Holders to calculate holder concentration.",
+    "unknown-view": "The active table cannot be identified as Holders.",
     inactive: "Waiting for a loaded Axiom token page."
   };
   const status = messages[data?.tableStatus] || "Open a token's Holders tab on Axiom.";
@@ -62,7 +104,10 @@ function renderHolders(snapshot) {
     const row = document.createElement("tr");
     row.appendChild(cell(holder.rank));
     const wallet = cell(holder.walletDisplay, "wallet-cell");
-    secondary(wallet, holder.walletAddress || "Identity unresolved", holder.walletAddress ? "cell-secondary wallet-address" : "cell-secondary unresolved");
+    secondary(wallet, holder.walletAddress || (holder.identityStatus === "conflicting" ? "Conflicting address hints · identity unresolved" : "Identity unresolved"), holder.walletAddress ? "cell-secondary wallet-address" : "cell-secondary unresolved");
+    const classification = holder.classification;
+    const classLabel = {pool: "Pool", burn: "Burn destination", locker: "Locker", "other-contract": "Other known contract"}[classification?.category];
+    secondary(wallet, classLabel ? `${classLabel} · Axiom-reported hint · not independently verified` : "Classification unknown · not independently verified");
     row.appendChild(wallet);
     const balance = Object.hasOwn(holder, "nativeBalance") ? holder.nativeBalance : holder.solBalance;
     row.appendChild(cell(amountText(balance, holder.balanceCurrency)));
@@ -77,6 +122,7 @@ function renderHolders(snapshot) {
     if (showFees) row.appendChild(cell(amountText(holder.feesPaid, holder.feesPaidCurrency)));
     const remaining = cell(holder.remainingTokenValue);
     secondary(remaining, holder.remainingPercentage ?? "% unavailable");
+    if (holder.tokenQuantity != null) secondary(remaining, `${holder.tokenQuantity} tokens · explicit DOM quantity`);
     row.appendChild(remaining);
     const funding = cell(holder.fundingSourceLabel);
     if (holder.fundingTransactionUrl) {
@@ -126,6 +172,7 @@ function render(snapshot) {
   for (const field of fields) {
     document.getElementById(field).textContent = snapshot.stats[field] ?? "—";
   }
+  document.getElementById("top10HoldersObservedAt").textContent = `DOM observation: ${holderTime(snapshot.marketObservedAt)}`;
   const net = document.getElementById("netVolume");
   net.classList.remove("positive", "negative");
   if ((snapshot.stats.netVolume || "").startsWith("+")) net.classList.add("positive");
@@ -160,3 +207,5 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 setInterval(updateStatus, 1000);
+document.getElementById("excludeHolderPools").addEventListener("change", renderConcentration);
+setInterval(renderConcentration, 1000);

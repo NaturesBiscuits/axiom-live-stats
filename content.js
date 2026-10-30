@@ -64,7 +64,7 @@
     return {
       title: document.title || "Axiom token",
       url: location.origin + location.pathname,
-      capturedAt: Date.now(), stats
+      capturedAt: Date.now(), marketObservedAt: Date.now(), stats
     };
   }
 
@@ -83,7 +83,7 @@
   const pageKey = () => location.origin + location.pathname;
   const holderMonitor = AxiomHolderTableExtractor.createMonitor(() => {
     // Holder mutations use the last market reading; they do not rescan the page.
-    if (!collecting && marketSnapshot?.chartContext?.routeKey === AxiomTokenContextDetector.routeKey()) sendSnapshot();
+    if (!collecting && !tokenPending && !contextDiscoveryNeeded && marketSnapshot?.chartContext?.routeKey === AxiomTokenContextDetector.routeKey()) sendSnapshot();
     else if (!collecting) schedule();
   });
 
@@ -132,7 +132,7 @@
     tokenPending = false;
     collecting = true;
     try {
-      holderMonitor.setContext(marketSnapshot.tokenKey, marketSnapshot.stats.holders, Boolean(snapshot));
+      holderMonitor.setContext(marketSnapshot.tokenKey, marketSnapshot.stats.holders, Boolean(snapshot), marketSnapshot.chartContext);
     } finally {
       collecting = false;
     }
@@ -164,7 +164,7 @@
   });
   marketObserver.observe(document.documentElement, {
     childList: true, subtree: true, characterData: true, attributes: true,
-    attributeFilter: ["hidden", "aria-hidden", "data-token-mint", "data-mint-address", "data-token-address", "data-pool-address", "data-pair-address", "data-chain", "data-network"]
+    attributeFilter: ["hidden", "aria-hidden", "aria-selected", "data-token-mint", "data-mint-address", "data-token-address", "data-pool-address", "data-pair-address", "data-chain", "data-network"]
   });
   window.addEventListener("popstate", schedule);
   window.addEventListener("hashchange", schedule);
@@ -230,7 +230,7 @@
     if (!event.persisted) return;
     marketObserver.observe(document.documentElement, {
       childList: true, subtree: true, characterData: true, attributes: true,
-      attributeFilter: ["hidden", "aria-hidden", "data-token-mint", "data-mint-address", "data-token-address", "data-pool-address", "data-pair-address", "data-chain", "data-network"]
+      attributeFilter: ["hidden", "aria-hidden", "aria-selected", "data-token-mint", "data-mint-address", "data-token-address", "data-pool-address", "data-pair-address", "data-chain", "data-network"]
     });
     heartbeat = setInterval(schedule, 2500);
     schedule();
