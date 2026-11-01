@@ -550,6 +550,9 @@
       await loadScript(doc, new URL("../holderTableExtractor.js", location.href).href);
       await loadScript(doc, new URL("../tokenInfoExtractor.js", location.href).href);
       await loadScript(doc, new URL("../tokenInfoDashboard.js", location.href).href);
+      await loadScript(doc, new URL("../supplyValuation.js", location.href).href);
+      await loadScript(doc, new URL("../supplyDashboard.js", location.href).href);
+      await loadScript(doc, new URL("../analysisRecordingDashboard.js", location.href).href);
       await loadScript(doc, new URL("../tradingParticipation.js", location.href).href);
       await loadScript(doc, new URL("../tradingDashboard.js", location.href).href);
       await loadScript(doc, new URL("../holderConcentration.js", location.href).href);

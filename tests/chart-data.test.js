@@ -26,7 +26,8 @@ function harness(responder, saved = {}) {
   return {collector: Chart.createCollector(options), options, calls, saved, advance: ms => { clock += ms; }};
 }
 const response = body => new Response(JSON.stringify(body), {status: 200, headers: {"Content-Type": "application/json"}});
-const ordinary = url => response(url.includes("/ohlcv/") ? candlesBody([[1791924720, 10, 13, 8, 12, 500]]) : poolBody());
+const ordinary = url => response(url.includes("/ohlcv/") ? {...candlesBody([[1791924720, 10, 13, 8, 12, 500]]),
+  ...(url.includes("token=quote") ? {meta: {base: {address: QUOTE}, quote: {address: MINT}}} : {})} : poolBody());
 
 test("normalization validates documented OHLCV ordering, sort, duplicates, UTC seconds and interval state", () => {
   const rows = [[1791924780, 10, 13, 8, 12, 5], [1791924720, 20, 23, 18, 22, 6],
@@ -73,21 +74,12 @@ test("quote-token selection requests quote OHLCV; unrelated and identical token/
   await assert.rejects(() => h.collector.collect({...context, mintAddress: POOL}), /must be different/);
 });
 
-test("untyped Axiom route is verified as pool; mint routes discover a labeled API fallback", async () => {
-  const routePool = harness(ordinary);
-  const result = await routePool.collector.collect({sourceKey: "route", blockchain: "solana", routeAddress: POOL});
-  assert.equal(result.metadata.poolSelection, "axiom-route-verified-pool");
-  assert.equal(result.metadata.mintAddress, MINT);
-  const routeMint = harness(url => {
-    if (url.includes(`/pools/${MINT}?`)) return new Response("{}", {status: 404});
-    if (url.includes(`/tokens/${MINT}/pools`)) return response({data: [poolBody().data]});
-    return ordinary(url);
-  });
-  const fallback = await routeMint.collector.collect({sourceKey: "mint-route", blockchain: "solana", routeAddress: MINT});
-  assert.equal(fallback.metadata.mintAddress, MINT);
-  assert.equal(fallback.metadata.poolAddress, POOL);
-  assert.equal(fallback.metadata.poolSelection, "geckoterminal-top-pool-fallback");
-  assert.equal(fallback.metadata.tokenSelection, "axiom-route-verified-mint");
+test("untyped routes, pool-base defaults and silent highest-liquidity selection cannot establish a selection", async () => {
+  const h = harness(ordinary);
+  await assert.rejects(() => h.collector.collect({blockchain: "solana", routeAddress: POOL}), /token.*address/);
+  await assert.rejects(() => h.collector.collect({blockchain: "solana", mintAddress: MINT}), /Find pools/);
+  await assert.rejects(() => h.collector.collect({blockchain: "solana", poolAddress: POOL}), /token.*address/);
+  assert.equal(h.calls.length, 0);
 });
 
 test("1-second requests and conflicting metadata fail without fabricated data", async () => {
@@ -149,7 +141,7 @@ test("persistent cache retains only four datasets and 500 chronologically sorted
   assert(h.saved.chartCache.every(dataset => dataset.candles.every((row, index, rows) => !index || row.timestamp > rows[index - 1].timestamp)));
 });
 
-test("retained incomplete intervals become closed after a successful later fetch, even across response gaps", async () => {
+test("successful refresh respects current provider gaps instead of resurrecting previously returned candles", async () => {
   let later = false;
   const h = harness(url => response(url.includes("/ohlcv/") ? candlesBody(later ?
     [[1791924720, 1, 3, 1, 2, 5]] : [[1791924780, 2, 4, 2, 3, 6]]) : poolBody()));
@@ -157,7 +149,91 @@ test("retained incomplete intervals become closed after a successful later fetch
   assert.equal(initial.candles[0].finalized, false);
   h.advance(61000); later = true;
   const updated = await h.collector.collect(context);
-  assert.equal(updated.candles.length, 2);
+  assert.equal(updated.candles.length, 1);
   assert(updated.candles.every(row => row.finalized));
-  assert.equal(updated.candles[1].close, 3, "Retained prices remain provider observations");
+  assert.equal(updated.candles[0].close, 2, "Only the latest provider response supplies successful refresh results");
+});
+
+test("pool discovery returns verified candidates with liquidity zeros and missing values, without selecting a pool", async () => {
+  const second = "11111111111111111111111111111111";
+  const a = poolBody().data, b = poolBody(second).data; a.attributes.reserve_in_usd = "0"; b.attributes.reserve_in_usd = null;
+  const h = harness(() => response({data: [a, b, a, {...poolBody().data, id: "eth_" + POOL}]}));
+  const found = await h.collector.findPools(context);
+  assert.equal(found.candidates.length, 2); assert.equal(found.candidates[0].liquidityUSD, 0); assert.equal(found.candidates[1].liquidityUSD, null);
+  assert.equal(found.poolAddress, undefined); assert.equal(found.rejectedPools, 1);
+  assert(h.calls[0].url.includes(`/tokens/${MINT}/pools`)); assert.equal((await h.collector.findPools(context)).cacheHit, true);
+  assert.equal(h.calls.length, 1); assert.equal(h.saved.chartCache, undefined);
+});
+test("wrong-network pool IDs and token relationships fail verification", async () => {
+  const badPool = poolBody(); badPool.data.id = "eth_" + POOL;
+  await assert.rejects(() => harness(() => response(badPool)).collector.collect(context), /metadata could not verify/);
+  const badToken = poolBody(); badToken.data.relationships.quote_token.data.id = "eth_" + QUOTE;
+  await assert.rejects(() => harness(() => response(badToken)).collector.collect(context), /metadata could not verify/);
+  await assert.rejects(() => harness(() => response(poolBody(POOL, MINT, MINT))).collector.collect(context), /metadata could not verify/);
+});
+test("null volume remains missing, zero remains zero and tiny OHLC prices retain full numeric precision", () => {
+  const body = candlesBody([[1791924720, 1e-30, 3e-30, 0, 2e-30, null], [1791924780, 0, 2e-30, 0, 1e-30, 0]]);
+  const result = Chart.normalizeCandles(body, 1791924810000);
+  assert.equal(result.candles.length, 2); assert.equal(result.candles[0].volume, null); assert.equal(result.candles[1].volume, 0);
+  assert.equal(result.candles[0].open, 1e-30); assert.equal(result.candles[1].finalized, false);
+});
+test("period summaries account for missing intervals, zero open, partial volume and incomplete candles", () => {
+  const metadata = {fetchedAt: 1791924810000};
+  const candles = Chart.normalizeCandles(candlesBody([[1791924720, 0, 3, 0, 2, null], [1791924780, 2, 4, 1, 3, 0]]), metadata.fetchedAt).candles;
+  const s = Chart.summarize({metadata, candles}, 900);
+  assert.equal(s.firstOpen, 0); assert.equal(s.latestClose, 3); assert.equal(s.changePercent, null);
+  assert.equal(s.highest, 4); assert.equal(s.lowest, 0); assert.equal(s.volume, 0); assert.equal(s.missingVolumes, 1);
+  assert.equal(s.missingIntervals, 13); assert.equal(s.incomplete, 1); assert.equal(s.complete, false);
+  const empty = Chart.summarize({metadata, candles: []}, 3600); assert.equal(empty.volume, null); assert.equal(empty.missingIntervals, 60);
+});
+test("malformed JSON, malformed candidate lists and empty indexed history are distinct", async () => {
+  await assert.rejects(() => harness(() => new Response("oops")).collector.findPools(context), /malformed JSON/);
+  await assert.rejects(() => harness(() => response({data: null})).collector.findPools(context), /malformed candidate/);
+  assert.deepEqual((await harness(() => response({data: []})).collector.findPools(context)).candidates, []);
+});
+test("explicit refresh bypasses the local candle TTL but still paces requests; aborted cached calls cannot succeed", async () => {
+  const h = harness(ordinary); await h.collector.collect(context);
+  await h.collector.collect(context, {force: true}); assert.equal(h.calls.length, 3);
+  assert(h.calls[2].at - h.calls[1].at >= Chart.REQUEST_GAP);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(() => h.collector.collect(context, {signal: controller.signal}), /abort/i);
+  await assert.rejects(() => h.collector.findPools(context, {signal: controller.signal}), /abort/i);
+});
+test("export includes exact UTC time, side, currency, selected period, stale state and missing-volume status", () => {
+  const dataset = {stale: true, metadata: {quoteCurrency: "USD", volumeCurrency: "USD", tokenSide: "quote", selectedPeriodSeconds: 900},
+    candles: [{timestamp: 60, open: 0, high: 2e-30, low: 0, close: 1e-30, volume: null, finalized: false}]};
+  const row = Chart.records(dataset, true)[0]; assert.equal(row.timestampUTC, "1970-01-01T00:01:00.000Z");
+  assert.equal(row.incomplete, true); assert.equal(row.intervalStatus, "incomplete"); assert.equal(row.tokenSide, "quote");
+  assert.equal(row.stale, true); assert.equal(row.volume, null); assert.equal(row.volumeAvailable, false); assert.equal(row.selectedPeriodSeconds, 900);
+});
+test("EVM bytes32 pool IDs are accepted as pools without ever accepting them as token addresses", async () => {
+  const mint = "0x" + "1".repeat(40), quote = "0x" + "2".repeat(40), pool = "0x" + "3".repeat(64);
+  assert.equal(Chart.isPoolAddress(pool, "eth"), true); assert.equal(Chart.isAddress(pool, "eth"), false);
+  const h = harness(url => response(url.includes("/ohlcv/") ? {data: {attributes: {ohlcv_list: []}}} : {data: {
+    id: `eth_${pool}`, attributes: {address: pool}, relationships: {base_token: {data: {id: `eth_${mint}`}}, quote_token: {data: {id: `eth_${quote}`}}}}}));
+  const data = await h.collector.collect({blockchain: "eth", mintAddress: mint, poolAddress: pool});
+  assert.equal(data.metadata.poolAddress, pool); assert.equal(data.metadata.mintAddress, mint);
+});
+test("quote OHLCV metadata must identify the selected quote token in response base, not the original pool base", async () => {
+  const h = harness(url => response(url.includes("/ohlcv/") ? candlesBody([[1791924720, 1, 3, 1, 2, 5]]) : poolBody()));
+  await assert.rejects(() => h.collector.collect({...context, mintAddress: QUOTE}), /does not match the selected token/);
+  const missing = harness(url => response(url.includes("/ohlcv/") ? {data: {attributes: {ohlcv_list: [[1791924720, 1, 3, 1, 2, 5]]}}} : poolBody()));
+  await assert.rejects(() => missing.collector.collect(context), /metadata may be missing/);
+});
+test("optional provider valuations retain actual raw fields, pool-base identity and original metadata time through cache and failures", async () => {
+  let failing = false;
+  const h = harness(url => {
+    if (failing) return new Response("{}", {status: 503});
+    if (url.includes("/ohlcv/")) return ordinary(url);
+    const body = poolBody(); body.data.attributes.market_cap_usd = "9007199254740993.01"; body.data.attributes.fdv_usd = null;
+    return response(body);
+  });
+  const first = await h.collector.collect(context), source = first.metadata.providerValuations;
+  assert.equal(source.fields.market_cap_usd, "9007199254740993.01"); assert.equal(source.fields.fdv_usd, null);
+  assert.equal(source.mintAddress, MINT); assert(source.fetchedAt < first.metadata.fetchedAt);
+  h.advance(61000); const quote = await h.collector.collect({...context, mintAddress: QUOTE});
+  assert.equal(quote.metadata.providerValuations.mintAddress, MINT, "Pool-base valuation is never relabeled as a quote-token valuation");
+  assert.equal(quote.metadata.providerValuations.fetchedAt, source.fetchedAt, "Fresh candles do not renew cached valuation timestamps");
+  failing = true; h.advance(61000); await assert.rejects(() => h.collector.collect(context), /503/);
+  assert.equal((await h.collector.cached(context)).metadata.providerValuations.fields.market_cap_usd, source.fields.market_cap_usd);
 });

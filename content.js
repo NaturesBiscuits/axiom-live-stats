@@ -14,6 +14,7 @@
   const isStatLabel = node => node.nodeType === 1 && node.childElementCount === 0 &&
     (Object.values(labels).includes(clean(node.textContent)) ||
       AxiomTokenInfo.labels.includes(clean(node.textContent)) ||
+      AxiomSupply.labels.includes(clean(node.textContent)) ||
       /^(?:Holders\s*\([\d,]+\)|Bundlers|Top 10 H\.|Market\s?Cap|Mkt\s?Cap)$/i.test(clean(node.textContent)));
   function statSpans() {
     const route = AxiomTokenContextDetector.routeKey();
@@ -37,6 +38,7 @@
   }
 
   const tokenInfoReader = AxiomTokenInfo.createReader();
+  const supplyReader = AxiomSupplyExtractor.createReader();
 
   function collect() {
     const spans = statSpans();
@@ -50,7 +52,8 @@
     const tokenInfo = tokenInfoReader.read(spans, {routeKey: AxiomTokenContextDetector.routeKey()});
     stats.bundlers = tokenInfo.tiles.bundlers.displayText;
     stats.top10Holders = tokenInfo.tiles.top10Holders.displayText;
-    if (stats.globalFees === null && stats.volume5m === null && stats.liquidity === null &&
+    if (stats.globalFees === null && stats.volume5m === null && stats.liquidity === null && stats.price === null && stats.supply === null &&
+        !spans.some(node => AxiomSupply.labels.includes(clean(node.textContent))) &&
         !Object.values(tokenInfo.tiles).some(tile => tile.status === "available") &&
         tokenInfo.token.status !== "resolved" && tokenInfo.developer.status !== "resolved") return null;
     return {
@@ -91,7 +94,7 @@
     const fingerprint = JSON.stringify({
       title: snapshot.title, url: snapshot.url, stats: snapshot.stats,
       holdersIntelligence: snapshot.holdersIntelligence, chartContext: snapshot.chartContext, liquidityContext: snapshot.liquidityContext,
-      tokenInfo: snapshot.tokenInfo, tradingContext: snapshot.tradingContext, tradingStatus: snapshot.tradingStatus
+      tokenInfo: snapshot.tokenInfo, supplyValuation: snapshot.supplyValuation, tradingContext: snapshot.tradingContext, tradingStatus: snapshot.tradingStatus
     });
     if (fingerprint === lastFingerprint && Date.now() - lastSentAt < 3000) return;
     lastFingerprint = fingerprint;
@@ -124,6 +127,8 @@
     contextDiscoveryNeeded = false;
     // Chain/mint/pool query changes also delimit holder sessions without storing unrelated queries.
     marketSnapshot.tokenKey = marketSnapshot.chartContext.routeKey;
+    marketSnapshot.supplyValuation = supplyReader.read(cachedSpans.filter(node => node.isConnected), marketSnapshot.chartContext);
+    marketSnapshot.stats.marketCap = marketSnapshot.supplyValuation.fields.marketCap.rawText;
     rolling.setToken(marketSnapshot.chartContext);
     liveValues.setToken(marketSnapshot.chartContext.sourceKey);
     liveValues.bind(cachedSpans.filter(node => node.isConnected));

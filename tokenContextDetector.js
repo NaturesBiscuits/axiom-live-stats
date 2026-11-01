@@ -3,6 +3,7 @@
   "use strict";
   const aliases = {sol: "solana", solana: "solana", bnb: "bsc", bsc: "bsc", eth: "eth", ethereum: "eth", base: "base"};
   const addressLike = text => /^(?:[1-9A-HJ-NP-Za-km-z]{32,44}|0x[\da-fA-F]{40})$/.test(text || "");
+  const poolLike = text => addressLike(text) || /^0x[\da-fA-F]{64}$/.test(text || "");
   const canonical = address => address?.startsWith("0x") ? address.toLowerCase() : address;
   const excluded = node => node.closest('[data-perf-id*="table"], [role="row"], .holder-table, [data-perf-id="token-trades-panel"]');
   function routeKey(locationLike = location) {
@@ -22,7 +23,7 @@
       ...(relatedIdentities?.funding?.sourceAddressCandidates ?? [])].map(canonical));
     const addChain = value => { const chain = aliases[value?.toLowerCase()]; if (chain) chains.add(chain); };
     const add = (target, value, source) => {
-      if (!addressLike(value)) return;
+      if (!(target === pools ? poolLike(value) : addressLike(value))) return;
       target.set(canonical(value), value); evidence.push(source);
     };
     addChain(url.searchParams.get("chain")); addChain(url.searchParams.get("network"));
@@ -31,7 +32,7 @@
     for (const field of ["pool", "poolAddress", "pairAddress"]) add(pools, url.searchParams.get(field), `url-${field}`);
     const parts = url.pathname.split("/").filter(Boolean);
     let routeAddress = null;
-    if (parts[0] === "meme" && addressLike(parts.at(-1))) routeAddress = parts.at(-1);
+    if (parts[0] === "meme" && poolLike(parts.at(-1))) routeAddress = parts.at(-1);
     if (aliases[parts[1]]) addChain(parts[1]);
 
     for (const node of doc.querySelectorAll("[data-token-mint], [data-mint-address], [data-token-address], [data-pool-address], [data-pair-address], [data-chain], [data-network]")) {

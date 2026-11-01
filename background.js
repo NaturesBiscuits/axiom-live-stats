@@ -8,6 +8,49 @@ importScripts("liquidityAlerts.js");
 importScripts("holderTableExtractor.js");
 importScripts("tradingParticipation.js");
 importScripts("tradingArchive.js");
+importScripts("supplyValuation.js");
+importScripts("holderConcentration.js");
+importScripts("analysisRecorder.js");
+importScripts("analysisRecordingArchive.js");
+const analysisRecording = AxiomAnalysisRecorder.createService({archive: AxiomAnalysisRecordingArchive.createArchive()});
+function recordingBroadcast(result) {
+  if (!result) return;
+  try { chrome.runtime.sendMessage({type: "AXIOM_RECORDING_STATE", session: result.session}, () => { void chrome.runtime.lastError; }); }
+  catch { /* Manual recording continues with the dashboard closed. */ }
+}
+function recordingExtras(snapshot, at, sourceTabId) {
+  const context = snapshot.chartContext, holders = snapshot.holdersIntelligence;
+  const matches = candidate => candidate && AxiomAnalysisRecorder.scopeKey(candidate) === AxiomAnalysisRecorder.scopeKey(context);
+  const matched = matches(holders?.context) && holders?.tokenKey === snapshot.tokenKey;
+  const concentration = AxiomHolderConcentration.analyze(matched ? holders : null, {now: at, excludePools: false});
+  const tradingKey = matches(snapshot.tradingContext) ? snapshot.tradingContext.tokenKey : null, cachedCoverage = tradingCoverage.get(tradingKey);
+  const coverage = tradingKey ? cachedCoverage?.sourceTabId === sourceTabId ? cachedCoverage : snapshot.tradingStatus ?? null : null;
+  const tradeRows = tradingKey ? tradingLive.rows(tradingKey).filter(row => row.firstSeenAt <= at && row.sourceTabId === sourceTabId && matches(row.context)) : [];
+  const summary = AxiomTrading.analyze(tradeRows, {now: at, seconds: 60, basis: "observation-time", coverage});
+  const currencies = summary.currencies.length ? summary.currencies : [null];
+  const trading = currencies.map(currency => {
+    const result = AxiomTrading.analyze(tradeRows, {now: at, seconds: 60, basis: "observation-time", currency, coverage,
+      losses: [...(tradingKey ? tradingLive.status(tradingKey).losses : []), tradingPendingLosses.get(tradingKey), tradingGlobalLoss].filter(Boolean)});
+    const {wallets, ...counts} = result; return counts;
+  });
+  const liquidityKey = matches(snapshot.liquidityContext) ? snapshot.liquidityContext.tokenKey : null;
+  const liquidity = [...liquidityRows.values()].map(rows => rows.filter(row => row.tokenKey === liquidityKey && row.sampledAt <= at && row.sourceTabId === sourceTabId))
+    .filter(rows => rows.length).map(current => ({unit: current.at(-1)?.unit ?? null, summary: AxiomLiquidityHistory.analyze(current)}));
+  const activity = alertSnapshot(liquidityKey);
+  const fromThisTab = key => { try { return JSON.parse(key).at(-1) === sourceTabId; } catch { return false; } };
+  const activityHistory = activity.history.filter(event => fromThisTab(event.scopeKey) && event.triggeredAt <= at);
+  return {
+    holders: {source: "Axiom DOM; partial rendered table", extractedAt: holders?.extractedAt ?? null,
+      tableStatus: matched ? holders.tableStatus : "unavailable", renderedHolders: matched ? holders.renderedHolders : null,
+      renderedBundlers: matched ? holders.renderedBundlers : null, unresolvedRendered: matched ? holders.unresolvedRendered : null,
+      retainedSessionIdentities: matched ? holders.observedHolders : null, concentration},
+    trading: {source: "Partial Axiom observed feed", status: coverage ? "observed-partial" : "unavailable", observedAt: coverage?.lastReadAt ?? null, filters: coverage?.filters ?? null,
+      archiveError: tradingError, windows: trading},
+    liquidity: {source: "Axiom-reported liquidity observations", status: liquidity.length ? "observed" : "unavailable", series: liquidity, storageError: liquidityError,
+      activity: {settings: activity.settings, states: activity.states.filter(state => fromThisTab(state.key) && state.lastSampledAt <= at), history: activityHistory.slice(-5),
+        retainedAlerts: activityHistory.length, includedLatestAlerts: Math.min(5, activityHistory.length), error: activity.error}}
+  };
+}
 const tradingArchive = AxiomTradingArchive.createArchive();
 const tradingLive = AxiomTrading.createStore();
 const tradingPending = new Map(), tradingCoverage = new Map(), tradingPendingLosses = new Map();
@@ -265,6 +308,21 @@ async function ensureDashboard(activate = false) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (["AXIOM_RECORDING_STATUS", "AXIOM_RECORDING_START", "AXIOM_RECORDING_STOP", "AXIOM_RECORDING_REPORT"].includes(message?.type)) {
+    if (sender.url !== chrome.runtime.getURL("dashboard.html")) return;
+    void (async () => {
+      let result;
+      if (message.type === "AXIOM_RECORDING_START") {
+        const {latestSnapshot, sourceTabId} = await chrome.storage.session.get(["latestSnapshot", "sourceTabId"]);
+        result = await analysisRecording.start(latestSnapshot, {sourceTabId, intervalMs: message.intervalMs, scope: message.scope}, at => recordingExtras(latestSnapshot, at, sourceTabId));
+      } else if (message.type === "AXIOM_RECORDING_STOP") result = await analysisRecording.stop();
+      else if (message.type === "AXIOM_RECORDING_REPORT") result = await analysisRecording.report();
+      else { result = await analysisRecording.expire() ?? await analysisRecording.status(); }
+      sendResponse({ok: true, ...result});
+      if (["AXIOM_RECORDING_START", "AXIOM_RECORDING_STOP"].includes(message.type)) recordingBroadcast(result);
+    })().catch(error => sendResponse({ok: false, error: error.message}));
+    return true;
+  }
   if (message?.type === "AXIOM_LIQUIDITY_ALERT_SETTINGS") {
     if (sender.url !== chrome.runtime.getURL("dashboard.html")) return;
     chartQueue = chartQueue.catch(() => {}).then(async () => {
@@ -347,6 +405,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type !== "AXIOM_STATS_UPDATE" || !message.snapshot) return;
   if (typeof sender.tab?.id !== "number" ||
       !sender.url?.startsWith("https://axiom.trade/")) return;
+  void analysisRecording.observe(message.snapshot, sender.tab.id, Date.now(), at => recordingExtras(message.snapshot, at, sender.tab.id))
+    .then(recordingBroadcast).catch(error => console.warn("Analysis recording:", error));
   void (async () => {
     await chrome.storage.session.set({
       latestSnapshot: message.snapshot,
@@ -362,4 +422,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.action.onClicked.addListener(() => {
   void ensureDashboard(true).catch(console.warn);
+});
+chrome.tabs.onRemoved?.addListener(tabId => {
+  void analysisRecording.sourceClosed(tabId).then(recordingBroadcast).catch(error => console.warn("Analysis recording:", error));
 });

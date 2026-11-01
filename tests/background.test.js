@@ -40,10 +40,17 @@ function worker(stored = {}, localSaved = {}, options = {}) {
     }
   }; };
   const url = "chrome-extension://fixture/dashboard.html";
-  runInNewContext(source, {console: {warn: error => warnings.push(error)}, Date: {now: () => clock},
+  runInNewContext(source, {console: {warn: error => warnings.push(error)}, Date: class extends Date { static now() { return clock; } },
     setTimeout(fn, ms) { const id = ++timerId; timers.set(id, {fn, at: clock + ms}); return id; },
     clearTimeout(id) { timers.delete(id); },
     importScripts(name) { imports.push(name); },
+    AxiomSupply: require("../supplyValuation.js"), AxiomHolderConcentration: require("../holderConcentration.js"),
+    AxiomAnalysisRecorder: {...require("../analysisRecorder.js"), createService: config => require("../analysisRecorder.js").createService({...config, now: () => clock})},
+    AxiomAnalysisRecordingArchive: {createArchive: () => ({
+      async load() { if (options.failRecordingReads) throw new Error("Recording read fixture failure"); return structuredClone(localSaved.recording ?? {session: null, rows: []}); },
+      async replace(session, rows) { if (options.failRecording) throw new Error("Recording disk fixture failure"); localSaved.recording = structuredClone({session, rows}); },
+      async save(session, row) { if (options.failRecording) throw new Error("Recording disk fixture failure"); localSaved.recording.session = structuredClone(session); if (row) localSaved.recording.rows.push(structuredClone(row)); }
+    })},
     AxiomSampleArchive: {...Archive, createArchive: options => fakeArchive(options?.databaseName === "axiom-liquidity-v1")},
     AxiomLiquidityHistory: require("../liquidityHistory.js"),
     AxiomLiquidityAlerts: {...require("../liquidityAlerts.js"), createEngine: () => require("../liquidityAlerts.js").createEngine({now: () => clock})},
@@ -64,7 +71,7 @@ function worker(stored = {}, localSaved = {}, options = {}) {
       get: async keys => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(key => [key, localSaved[key]])),
       set: async values => { localWrites.push(values); Object.assign(localSaved, structuredClone(values)); }
     }, session: {
-      get: async key => ({[key]: stored[key]}),
+      get: async keys => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(key => [key, stored[key]])),
       set: async values => Object.assign(stored, structuredClone(values))
     }},
     tabs: {
@@ -141,6 +148,73 @@ test("republished snapshots preserve independent holder and market extraction ti
 });
 
 const chartSender = {tab: {id: 42}, url: "https://axiom.trade/meme/token-a"};
+function recordingSnapshot(at, key = "record-a") {
+  return {title: "Recording fixture", url: chartSender.url, tokenKey: chartSender.url, capturedAt: at, marketObservedAt: at,
+    chartContext: {sourceKey: key, routeKey: chartSender.url, blockchain: "eth", mintAddress: "0x" + "1".repeat(40)}, stats: {price: "$2", marketCap: "$999", supply: "1K"}};
+}
+const recordingSender = {url: "chrome-extension://fixture/dashboard.html"};
+const recordingRequest = (instance, type, args = {}) => new Promise(resolve => instance.send({type, ...args}, recordingSender, resolve));
+
+test("Manual recording commands are dashboard-only and require a recent source snapshot", async () => {
+  const instance = worker(); let called = false;
+  instance.send({type: "AXIOM_RECORDING_START"}, chartSender, () => { called = true; }); await flush(); assert.equal(called, false);
+  assert.equal((await recordingRequest(instance, "AXIOM_RECORDING_START", {intervalMs: 5000, scope: "all"})).ok, false);
+  const snapshot = recordingSnapshot(instance.now()); instance.send({type: "AXIOM_STATS_UPDATE", snapshot}, chartSender); await flush();
+  const started = await recordingRequest(instance, "AXIOM_RECORDING_START", {intervalMs: 5000, scope: "all"});
+  assert.equal(started.ok, true); assert.equal(started.session.count, 1); assert.equal(started.session.sourceTabId, 42);
+  assert.equal(instance.localSaved.recording.rows[0].market.values.marketCap, "$999");
+});
+
+test("Worker records bounded analyzer summaries with dashboard closed and ignores other source tabs", async () => {
+  const instance = worker({dashboardAutoOpened: true});
+  instance.send({type: "AXIOM_STATS_UPDATE", snapshot: recordingSnapshot(instance.now())}, chartSender); await flush();
+  await recordingRequest(instance, "AXIOM_RECORDING_START", {intervalMs: 5000, scope: "all"});
+  instance.advance(5000);
+  instance.send({type: "AXIOM_STATS_UPDATE", snapshot: recordingSnapshot(instance.now(), "other")}, {...chartSender, tab: {id: 99}}); await flush();
+  instance.send({type: "AXIOM_STATS_UPDATE", snapshot: recordingSnapshot(instance.now())}, chartSender); await flush();
+  const stopped = await recordingRequest(instance, "AXIOM_RECORDING_STOP");
+  assert.equal(stopped.ok, true); assert.equal(stopped.session.count, 2); assert.match(stopped.text, /ENTRIES — one JSON object per line/);
+  assert.equal(instance.created.length, 0); assert.equal(instance.localSaved.recording.rows[1].trading.status, "unavailable");
+  assert.equal(instance.localSaved.recording.rows[1].holders.tableStatus, "unavailable"); assert.equal(instance.stored.latestSnapshot.stats.marketCap, "$999");
+  assert.equal(instance.archiveWrites.length, 0); assert.equal(instance.warnings.length, 0);
+});
+
+test("Source switches stop a manual recording and worker restart restores an honest interrupted report", async () => {
+  const instance = worker(); instance.send({type: "AXIOM_STATS_UPDATE", snapshot: recordingSnapshot(instance.now())}, chartSender); await flush();
+  await recordingRequest(instance, "AXIOM_RECORDING_START", {intervalMs: 5000, scope: "supply"});
+  instance.advance(5000); instance.send({type: "AXIOM_STATS_UPDATE", snapshot: recordingSnapshot(instance.now(), "new-token")}, chartSender); await flush();
+  const stopped = await recordingRequest(instance, "AXIOM_RECORDING_STATUS"); assert.equal(stopped.session.stopReason, "source-token-or-network-changed");
+  await recordingRequest(instance, "AXIOM_RECORDING_START", {intervalMs: 5000, scope: "supply"});
+  const restarted = worker(instance.stored, instance.localSaved);
+  const report = await recordingRequest(restarted, "AXIOM_RECORDING_REPORT"); assert.equal(report.ok, true); assert.match(report.session.stopReason, /interrupted/);
+  assert.equal(report.session.count, 1); assert.equal(instance.localSaved.recording.rows[0].market, undefined);
+});
+
+test("All-summary recordings retain matching trading/liquidity data while excluding another tab on the same pool", async () => {
+  const instance = worker(), trades = tradePacket(instance), context = trades.context;
+  const liquidity = liquidityRow(instance.now(), context, "$500");
+  instance.send({type: "AXIOM_TRADES_UPDATE", packet: trades}, chartSender);
+  instance.send({type: "AXIOM_LIQUIDITY_UPDATE", row: liquidity}, chartSender); await flush();
+  instance.send({type: "AXIOM_TRADES_UPDATE", packet: tradePacket(instance, ["other-tab-only"])}, {...chartSender, tab: {id: 99}});
+  instance.send({type: "AXIOM_LIQUIDITY_UPDATE", row: liquidityRow(instance.now(), context, "3 SOL")}, {...chartSender, tab: {id: 99}}); await flush();
+  const snapshot = {...recordingSnapshot(instance.now()), chartContext: context, tradingContext: context, tradingStatus: trades.coverage, liquidityContext: liquidity.tokenIdentity,
+    tokenInfo: {source: "axiom-reported", observedAt: instance.now(), status: "observed", tiles: {developerHoldings: {value: 0, sourceText: "0%", status: "available"}}}};
+  instance.send({type: "AXIOM_STATS_UPDATE", snapshot}, chartSender); await flush();
+  const start = await recordingRequest(instance, "AXIOM_RECORDING_START", {intervalMs: 5000, scope: "all"}); assert.equal(start.ok, true);
+  const row = instance.localSaved.recording.rows[0]; assert.equal(row.trading.windows[0].buys, 2); assert.equal(row.trading.windows[0].totalVolume, 20);
+  assert.equal(row.trading.windows[0].wallets, undefined); assert.equal(row.liquidity.series.length, 1); assert.equal(row.liquidity.series[0].unit, "USD");
+  assert.equal(row.liquidity.series[0].summary.latest.value, 500); assert.equal(row.liquidity.activity.states.length, 1); assert.equal(row.tokenInfo.tiles.developerHoldings.value, 0);
+});
+
+test("Recording storage errors cannot stop ordinary market snapshot delivery", async () => {
+  const instance = worker({}, {}, {failRecordingReads: true}); const snapshot = recordingSnapshot(instance.now());
+  instance.send({type: "AXIOM_STATS_UPDATE", snapshot}, chartSender); await flush();
+  assert.deepEqual(instance.stored.latestSnapshot, snapshot);
+  const start = await recordingRequest(instance, "AXIOM_RECORDING_START", {intervalMs: 5000, scope: "all"}); assert.equal(start.ok, false); assert.match(start.error, /read fixture/);
+  instance.advance(5000); const next = recordingSnapshot(instance.now()); instance.send({type: "AXIOM_STATS_UPDATE", snapshot: next}, chartSender); await flush();
+  assert.deepEqual(instance.stored.latestSnapshot, next);
+});
+
 function packetAt(at, key = "token-a", value = 1) {
   const model = require("../rollingChartCollector.js").createStore({now: () => at});
   model.setToken({sourceKey: key, blockchain: "solana", routeKey: "https://axiom.trade/meme/" + key});
@@ -160,7 +234,7 @@ test("rolling chart delivery is live but persistence is batched every 15 seconds
   assert.equal(instance.localWrites.length, 0);
   assert.equal(instance.archiveWrites.length, 1);
   assert.equal(instance.localSaved.archiveRows.length, 15);
-  assert.deepEqual(instance.imports, ["rollingChartCollector.js", "sampleArchive.js", "liquidityHistory.js", "liquidityAlerts.js", "holderTableExtractor.js", "tradingParticipation.js", "tradingArchive.js"], "Only local recording modules are loaded");
+  assert.deepEqual(instance.imports, ["rollingChartCollector.js", "sampleArchive.js", "liquidityHistory.js", "liquidityAlerts.js", "holderTableExtractor.js", "tradingParticipation.js", "tradingArchive.js", "supplyValuation.js", "holderConcentration.js", "analysisRecorder.js", "analysisRecordingArchive.js"], "Only local recording modules are loaded");
   assert.equal(instance.stored.chartState, undefined, "No per-second chart session-storage writes");
 });
 

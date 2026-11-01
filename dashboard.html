@@ -9,6 +9,9 @@
   <script src="holderTableExtractor.js" defer></script>
   <script src="tokenInfoExtractor.js" defer></script>
   <script src="tokenInfoDashboard.js" defer></script>
+  <script src="supplyValuation.js" defer></script>
+  <script src="supplyDashboard.js" defer></script>
+  <script src="analysisRecordingDashboard.js" defer></script>
   <script src="tradingParticipation.js" defer></script>
   <script src="tradingDashboard.js" defer></script>
   <script src="holderConcentration.js" defer></script>
@@ -33,17 +36,47 @@
       <div><p class="eyebrow">ACTIVE TOKEN</p><h1 id="tokenTitle">Open a token page on Axiom</h1><a id="tokenLink" href="https://axiom.trade/" target="_blank" rel="noopener noreferrer">Open Axiom ↗</a></div>
       <div class="right"><p class="eyebrow">LAST UPDATE</p><p id="updatedAt">—</p></div>
     </section>
+    <section class="analysis-recording chart-collector" aria-labelledby="recordingHeading">
+      <div class="section-heading"><h2 id="recordingHeading">Record for AI analysis</h2><span class="source-tag">Local observation log</span></div>
+      <div class="chart-controls">
+        <label>Include <select id="recordingScope"><option value="all">All analyzer summaries</option><option value="supply">Supply &amp; Valuation only</option></select></label>
+        <label>Log interval <select id="recordingInterval"><option value="5000">5 seconds</option><option value="15000">15 seconds</option><option value="30000">30 seconds</option></select></label>
+        <button id="recordingStart" type="button" disabled>Start recording</button><button id="recordingStop" type="button" disabled>Stop &amp; produce report</button><button id="recordingCopy" type="button" disabled>Copy report</button>
+      </div>
+      <p id="recordingStatus" class="section-note" role="status" aria-live="polite">Waiting for Axiom observations.</p>
+      <p id="recordingDuration" class="section-note">Recorded duration: —</p><p id="recordingTimes" class="card-note"></p>
+      <p class="card-note">Records one token and source tab with UTC observation times. Stops on token/network changes, after 1 hour, or at the recording size limit. Starting a new recording replaces the previous local report; copy it first. No data is sent to an AI service.</p>
+      <details id="recordingOutputDetails" class="chart-diagnostics" hidden><summary id="recordingOutputSummary">Copyable LLM report</summary>
+        <div class="chart-controls"><button id="recordingOutputCopy" type="button" disabled>Copy report to clipboard</button></div>
+        <label for="recordingOutput" class="section-note">Paste this report into your LLM. It includes source definitions, missing data and coverage limitations.</label>
+        <textarea id="recordingOutput" readonly spellcheck="false" aria-label="Recorded analyzer report"></textarea>
+      </details>
+    </section>
     <section class="metrics">
       <article class="card"><div class="label">Global Fees Paid</div><div class="value" id="globalFees">—</div></article>
       <article class="card"><div class="label">Price (Axiom display)</div><div class="value" id="price">—</div></article>
+      <article class="card"><div class="label">Market Cap — Axiom-reported</div><div class="value" id="marketCap">—</div></article>
       <article class="card"><div class="label">Liquidity</div><div class="value" id="liquidity">—</div></article>
-      <article class="card"><div class="label">Supply</div><div class="value" id="supply">—</div></article>
+      <article class="card"><div class="label">Supply — Axiom-displayed, type unspecified</div><div class="value" id="supply">—</div></article>
       <article class="card"><div class="label">All-Time High</div><div class="value" id="ath">—</div></article>
       <article class="card"><div class="label">5m Volume</div><div class="value" id="volume5m">—</div></article>
       <article class="card"><div class="label">Buys · Count / Value</div><div class="value buy" id="buys">—</div></article>
       <article class="card"><div class="label">Sells · Count / Value</div><div class="value sell" id="sells">—</div></article>
       <article class="card"><div class="label">Net Volume</div><div class="value" id="netVolume">—</div></article>
       <article class="card"><div class="label">Holders tab count — Axiom-reported</div><div class="value" id="holders">—</div></article>
+    </section>
+    <section class="supply-valuation chart-collector" aria-labelledby="supplyValuationHeading">
+      <div class="section-heading"><h2 id="supplyValuationHeading">Supply &amp; Valuation</h2><span class="source-tag">Sources and supply definitions</span></div>
+      <p id="supplyContext" class="card-note"></p>
+      <div id="supplyObserved" class="supply-figures" aria-label="Axiom-reported figures"></div>
+      <details class="chart-diagnostics"><summary>Explicitly typed supply figures</summary><div id="supplyTyped" class="supply-figures"></div></details>
+      <label class="card-note"><input id="supplyGenericCalculation" type="checkbox"> Show valuation using Axiom-displayed supply (supply type unspecified)</label>
+      <div id="supplyCalculations" class="supply-figures" aria-label="Calculated valuation estimates"></div>
+      <p class="section-note">Generic Supply has an unspecified definition. Total, circulating and maximum supply are distinct. No circulating supply is inferred from pools, treasuries, lockers or burns. Calculations use displayed inputs and remain approximate; they do not replace observed market-cap charts.</p>
+      <details class="chart-diagnostics"><summary>Provenance, freshness and optional provider figures</summary>
+        <p class="section-note">Exact parsing is not independent verification. No RPC supply or decimals verification has been performed. Provider-reported figures are separate from chain-specific calculated estimates.</p>
+        <div id="supplyProvenance"></div><p id="supplyProviderStatus" class="card-note">Optional provider figures appear only after an explicit historical pool lookup; no API is required here.</p><div id="supplyProvider"></div>
+      </details>
     </section>
     <section class="token-info-exposure" aria-labelledby="tokenInfoHeading">
       <div class="section-heading"><h2 id="tokenInfoHeading">Token Info &amp; Developer Exposure</h2><span class="source-tag">Axiom-reported DOM</span></div>
@@ -195,20 +228,27 @@
       <p class="card-note">TradingView Lightweight Charts™ · Copyright (с) 2025 TradingView, Inc. <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView</a> · bundled locally, Apache-2.0.</p>
     </section>
     <section class="chart-collector" aria-labelledby="historyHeading">
-      <div class="section-heading"><div><p class="eyebrow">OPTIONAL MARKET HISTORY</p><h2 id="historyHeading">Historical price candles</h2></div><span class="source-tag">GeckoTerminal · 1-minute OHLCV · USD</span></div>
+      <div class="section-heading"><div><p class="eyebrow">OPTIONAL MARKET HISTORY</p><h2 id="historyHeading">Historical price &amp; volume</h2></div><span class="source-tag">GeckoTerminal · 1-minute OHLCV · USD</span></div>
       <p class="section-note">Load market history from a verified network, token and pool. These candles are separate from local DOM observations. Confirm the pool matches the one you want to compare on Axiom; other pools can have different prices.</p>
-      <form id="historyForm" class="chart-controls">
-        <label>Network <select id="historyNetwork" required><option value="">Select network</option><option value="solana">Solana</option><option value="bsc">BNB Chain</option><option value="eth">Ethereum</option><option value="base">Base</option></select></label>
-        <label>Token address <input id="historyMint" required spellcheck="false" autocomplete="off" placeholder="Full token / mint address"></label>
-        <label>Pool address <input id="historyPool" required spellcheck="false" autocomplete="off" placeholder="Full liquidity pool address"></label>
+      <form id="historyForm" class="chart-controls" novalidate>
+        <label>Network <select id="historyNetwork" required aria-describedby="historyNetworkHelp"><option value="">Select network</option><option value="solana">Solana</option><option value="bsc">BNB Chain</option><option value="eth">Ethereum</option><option value="base">Base</option></select><span id="historyNetworkHelp" class="history-field-help"></span></label>
+        <label>Token address <input id="historyMint" required spellcheck="false" autocomplete="off" placeholder="Full token / mint address" aria-describedby="historyMintHelp"><span id="historyMintHelp" class="history-field-help"></span></label>
+        <label>Pool address <input id="historyPool" required spellcheck="false" autocomplete="off" placeholder="Full pool address or choose a candidate" aria-describedby="historyPoolHelp"><span id="historyPoolHelp" class="history-field-help"></span></label>
+        <button id="historyFindPools" type="button">Find pools</button>
         <button id="historyLoad" type="submit">Load 1-minute candles</button>
       </form>
+      <p id="historyPoolStatus" class="card-note" role="status">Pool unknown? Select the network and token, then choose Find pools.</p><div id="historyCandidates" aria-label="Candidate pools"></div>
       <p id="historyStatus" class="table-status" role="status">Optional: loading requests access to the GeckoTerminal public API. No requests run automatically.</p>
       <div id="historyResults" hidden>
         <p id="historyIdentity" class="card-note"></p>
-        <div class="chart-controls"><label>Period <select id="historyRange"><option value="900">15m</option><option value="3600">1h</option></select></label><button id="historyFit" type="button">Reset view</button><button id="historyExport" type="button">Export OHLCV CSV</button></div>
-        <div class="rolling-chart-wrap"><div id="historicalChart" role="region" aria-label="Interactive one-minute USD price candles from GeckoTerminal"></div></div>
-        <p id="historyCursor" class="card-note">Hover a candle to inspect OHLCV. Empty minutes remain blank; the current candle can be incomplete.</p>
+        <p id="historyTiming" class="card-note"></p><p id="historyCoverage" class="section-note"></p>
+        <div class="chart-controls"><label>Period <select id="historyRange"><option value="900">15m</option><option value="3600">1h</option></select></label><button id="historyFit" type="button">Reset view</button><button id="historyRefresh" type="button">Refresh from provider</button><button id="historyExport" type="button">Export OHLCV CSV</button></div>
+        <dl class="history-summary"><div><dt>First available open</dt><dd id="historyOpen">Unavailable</dd></div><div><dt>Latest available close</dt><dd id="historyClose">Unavailable</dd></div><div><dt>Highest high</dt><dd id="historyHigh">Unavailable</dd></div><div><dt>Lowest low</dt><dd id="historyLow">Unavailable</dd></div><div><dt>Open-to-close change</dt><dd id="historyChange">Unavailable</dd></div><div><dt>Available provider volume</dt><dd id="historyVolume">Unavailable</dd></div></dl>
+        <p id="historyVolumeCoverage" class="card-note"></p>
+        <div class="rolling-chart-wrap"><div id="historicalChart" role="region" aria-label="Interactive one-minute USD price candles and aligned provider USD volume, with separate scales"></div></div>
+        <p id="historyCursor" class="card-note">Hover a candle or volume bar to inspect provider OHLCV.</p>
+        <p class="section-note">Volume is provider-reported USD volume on its own scale. Bar colors follow candle direction; they do not measure buy/sell volume. Incomplete candles are marked; interval-ended candles may still be revised. Zoom/pan both panes together; Reset view fits available candles.</p>
+        <p class="section-note">Trade counts and unique wallets are unavailable from OHLCV. Trading Participation reports separate Axiom-observed activity with independent timing and partial coverage; it is not a complete trade record for this provider pool.</p>
       </div>
     </section>
     <footer>Statistics, holders and live observations reflect Axiom's rendered DOM. Keep the source page visible for reliable timing. Historical candles come from GeckoTerminal for the selected pool.</footer>

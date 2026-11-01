@@ -4,7 +4,7 @@
   "version": "0.6.0",
   "scripts": {
     "vendor": "node scripts/vendor-charts.js",
-    "test": "node --test tests/background.test.js tests/rolling-chart.test.js tests/chart-view.test.js tests/chart-data.test.js tests/liquidity-history.test.js tests/liquidity-alerts.test.js tests/holder-concentration.test.js tests/token-info.test.js tests/trading-participation.test.js",
+    "test": "node --test tests/background.test.js tests/rolling-chart.test.js tests/chart-view.test.js tests/chart-data.test.js tests/liquidity-history.test.js tests/liquidity-alerts.test.js tests/holder-concentration.test.js tests/token-info.test.js tests/trading-participation.test.js tests/supply-valuation.test.js tests/analysis-recorder.test.js",
     "test:browser": "node tests/run-browser-tests.js",
     "test:storage": "node tests/run-storage-tests.js"
   },

@@ -1,6 +1,6 @@
 "use strict";
 const fields = [
-  "globalFees", "price", "liquidity", "supply", "ath",
+  "globalFees", "price", "marketCap", "liquidity", "supply", "ath",
   "volume5m", "buys", "sells", "netVolume", "holders", "bundlers", "top10Holders"
 ];
 let lastSeenAt = null;
@@ -180,6 +180,8 @@ function render(snapshot) {
   document.getElementById("updatedAt").textContent = new Date(lastSeenAt).toLocaleTimeString();
   renderHolders(snapshot);
   AxiomTokenInfoUI.render(snapshot, currentHolderData);
+  globalThis.AxiomSupplyUI?.setSnapshot(snapshot);
+  globalThis.AxiomRecordingUI?.setSnapshot(snapshot);
   AxiomTradingUI.setSnapshot(snapshot);
   AxiomChartUI.setSnapshot(snapshot);
   globalThis.AxiomLiquidityUI?.setContext(snapshot.liquidityContext);

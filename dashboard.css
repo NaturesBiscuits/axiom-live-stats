@@ -15,3 +15,19 @@
 #liquidityAlertStatus[data-state="delayed"] { color: #f2c879; }
 .liquidity-alert-event { padding: 10px 0; border-bottom: 1px solid #344356; overflow-wrap: anywhere; }
 #liquidityAlertForm input[type="number"] { width: 130px; }
+#historicalChart{height:460px}
+#historyForm label{display:flex;flex-direction:column;align-items:flex-start;gap:6px;max-width:100%;flex:1 1 210px}
+.history-field-help{font-size:11px;color:#f2c879;max-width:280px;line-height:1.5}
+#historyForm [aria-invalid="true"]{border-color:#f2c879}
+#historyCandidates{display:grid;gap:8px;margin:12px 0;max-height:240px;overflow:auto}
+.history-pool-candidate{font:inherit;font-size:12px;line-height:1.6;text-align:left;color:#c8d8ff;background:#10131b;border:1px solid #344356;border-radius:7px;padding:10px;overflow-wrap:anywhere;cursor:pointer}
+.history-pool-candidate:focus-visible{outline:2px solid #82a0ff;outline-offset:2px}
+.history-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:12px;margin:14px 0}
+.history-summary div{padding:12px;background:#10131b;border:1px solid #252b38;border-radius:8px;min-width:0}
+.history-summary dt{font-size:11px;color:#a5b1c7}.history-summary dd{font-size:13px;margin:8px 0 0;overflow-wrap:anywhere}
+#historyIdentity,#historyTiming{overflow-wrap:anywhere}
+.supply-figures{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,245px),1fr));gap:10px;margin:14px 0}
+.supply-figure{padding:12px;background:#10131b;border:1px solid #252b38;border-radius:8px;min-width:0;overflow-wrap:anywhere}
+.supply-figure h3{font-size:12px;color:#a5b1c7;font-weight:500;margin:0 0 8px}.supply-amount{font-size:16px;margin:0 0 8px}
+.supply-provenance{padding:8px 0;border-bottom:1px solid #252b38;overflow-wrap:anywhere}.supply-provenance summary{font-size:12px;color:#a5b1c7}
+.analysis-recording{margin-top:0;padding-top:0;border-top:0;margin-bottom:25px}.analysis-recording .section-heading h2{font-size:17px}#recordingOutput{display:block;width:100%;min-height:280px;resize:vertical;margin-top:12px;padding:12px;background:#080a10;color:#c8d8ff;border:1px solid #344356;border-radius:8px;font:11px/1.6 ui-monospace,monospace;white-space:pre}#recordingOutput:focus-visible{outline:2px solid #82a0ff;outline-offset:2px}#recordingTimes{overflow-wrap:anywhere}
