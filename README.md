@@ -18,6 +18,12 @@ Global Fees Paid, Price, Liquidity, Supply, ATH, 5m Volume, Buys, Sells, Net Vol
 
 See [LIQUIDITY_HISTORY.md](LIQUIDITY_HISTORY.md) for sampling/identity rules, baseline tolerance, coverage, separate retention limits, regression coverage and live Axiom checks.
 
+**Liquidity Activity & Alerts** extends that recorder with a configurable sustained-drop rule (starter: 20% over 1 minute, 3 fresh observations; recovery: 15% from the original trigger baseline for 2 observations). It runs in the worker with the dashboard closed, preserves evidence in the existing liquidity archive, and shows stale/restored state explicitly. Settings and bounded alert history are expandable. Observed drops have **Cause unverified**; no threshold reached is not a safety verdict, and LP Burned remains separate context. See [LIQUIDITY_ALERTS.md](LIQUIDITY_ALERTS.md) for rules, validation, timing tolerance, partial coverage, 200-episode/7-day retention, tests and manual checks.
+
+The **Token Info & Developer Exposure** section adds displayed tax, developer/sniper holdings, insider share, LP burned, separate Holders tile/Pro Traders counts and Dex Paid status. It reuses the existing Top 10/Bundlers cards, captures explicit CA/DA addresses and developer funding context, and labels the self-chosen developer username as unverified. All fields are Axiom-reported DOM observations. Funding relative age is separate from token age; the unexplained funding badge is retained only as uninterpreted metadata. See [TOKEN_INFO.md](TOKEN_INFO.md) for the field schema, conservative navigation guards, source limitations and manual checks.
+
+**Trading Participation — Axiom DOM observations** adds 1m/5m/15m observed buy/sell counts, unique/repeat addresses, both-side activity and currency-specific volume concentration. It reads the scoped trade feed and preserves complete event keys, raw amounts, unresolved identities and frozen relative-age estimates. Coverage is partial and filter/timing limitations are explicit. Separate IndexedDB retention is 24h / 50,000 events; collection continues with the dashboard closed. See [TRADING_PARTICIPATION.md](TRADING_PARTICIPATION.md) for definitions, limits, the modified-file list and manual checks. The dashboard opens automatically once per browser session; after closing it, use the toolbar to reopen it.
+
 ## Test changes
 
 After changing extension files, click **Reload** on `chrome://extensions`, then refresh the Axiom page and dashboard. Axiom is the only required host permission; loading optional historical candles requests GeckoTerminal access. The manifest injects the holder extractor, token detector, rolling chart store, cached live-value reader and liquidity recorder before `content.js`.
@@ -34,6 +40,10 @@ After changing extension files, click **Reload** on `chrome://extensions`, then 
 
 - `holderTableExtractor.js`: Extracts only the scoped Holders table, observes row mutations, and retains up to 1,000 full-address session observations.
 - `holderConcentration.js`: Validates one current extraction, deduplicates full addresses, checks percentage totals and sort/leading-set evidence, and applies explicit supported pool exclusions without renormalizing supply.
+- `tokenInfoExtractor.js`: Exact labeled tiles, separate CA/DA/funding identities, display provenance, token-transition guards and current full-address developer holder matches.
+- `tokenInfoDashboard.js`: Compact source-labeled Token Info/developer section with unavailable states, source times, safe text and validated explorer links.
+- `tradeFeedExtractor.js`, `tradingParticipation.js`: Scoped trade events, opaque identity/deduplication, frozen approximate age timing and participation/concentration analysis.
+- `tradingArchive.js`, `tradingDashboard.js`: Separate bounded event persistence, live/history delivery, currency/timing window controls and per-wallet activity.
 - `tokenContextDetector.js`: Reads public token/pool DOM hints and recognized URL identity parameters; keeps untyped route addresses separate from mint and pool hints.
 - `content.js`: Reads market DOM text and sends a roughly 3-second heartbeat. Holder-only changes reuse the last market reading without rescanning the document. Holder sessions use recognized route identity plus detected network/mint/pool context.
 - `rollingChartCollector.js`: Small/subscript price parsing, independent clocks, one-second slots, bounded histories, null gaps, merges and exports.

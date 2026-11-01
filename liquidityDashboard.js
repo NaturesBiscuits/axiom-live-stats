@@ -6,6 +6,7 @@
   const timeline = chart.addSeries(LightweightCharts.LineSeries, {priceScaleId: "timeline", lineVisible: false,
     pointMarkersVisible: false, lastValueVisible: false, priceLineVisible: false});
   let context = null, rows = [], liveAt = null, generation = 0, series = [], plotted = [], plotKey = "", archiveError = null;
+  let activity = null;
   const time = at => Number.isFinite(at) ? new Date(at).toISOString() : "Unavailable";
   const amount = row => row ? `${new Intl.NumberFormat("en-US", {maximumSignificantDigits: 8}).format(row.value)} ${row.unit}` : "Unavailable";
   const change = value => value === null ? "Unavailable" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
@@ -40,6 +41,7 @@
       `${last ? ` · latest attempt ${last.status} at ${time(last.domReadAt)}` : ""}` +
       `${archiveError ? ` · Storage error: ${archiveError}` : ""}`;
     node("liquidityIdentity").textContent = context ? `${context.blockchain ?? "Network unresolved"} · token ${context.mintAddress ?? context.routeAddress ?? "unresolved"} · pool ${context.poolAddress ?? "unresolved (page-session series only)"} · identity ${context.identityStatus}` : "Waiting for token identity";
+    globalThis.AxiomLiquidityAlertUI?.render({context, rows, unit: select.value, activity, liveAt});
     const seconds = Number(node("liquidityRange").value), end = selected.at(-1)?.sampledAt ?? now;
     plotted = selected.filter(row => row.sampledAt >= end - seconds * 1000);
     const key = JSON.stringify([context?.tokenKey, select.value, seconds, plotted.length, plotted.at(-1)]);
@@ -72,9 +74,10 @@
       if (requestId !== generation) return;
       archiveError = chrome.runtime.lastError?.message ?? response?.error ?? null;
       if (response?.ok) {
+        activity = response.activity ?? null;
         rows = H.mergeRows(response.saved, response.live, rows);
         // Only worker-held delivery establishes connectivity; disk timestamps do not.
-        liveAt = Math.max(liveAt ?? 0, ...(response.live ?? []).map(row => row.deliveredAt ?? 0)) || null;
+        liveAt = Math.max(liveAt ?? 0, ...(response.live ?? []).filter(row => !context.recordingId || row.tokenIdentity?.recordingId === context.recordingId).map(row => row.deliveredAt ?? 0)) || null;
       }
       render();
     }); } catch (error) { archiveError = error.message; render(); }
@@ -83,15 +86,18 @@
   node("liquidityRefresh").addEventListener("click", hydrate);
   chrome.runtime.onMessage.addListener((message, sender) => {
     if (sender.id !== chrome.runtime.id) return;
-    if (message?.type === "AXIOM_LIQUIDITY_ARCHIVE_STATUS") { archiveError = message.error; render(); return; }
+    if (message?.type === "AXIOM_LIQUIDITY_ALERT_SETTINGS_LIVE") { hydrate(); return; }
+    if (message?.type === "AXIOM_LIQUIDITY_ARCHIVE_STATUS") { archiveError = message.error; if (activity) activity.error = message.alertError ?? null; render(); return; }
     if (message?.type !== "AXIOM_LIQUIDITY_LIVE" || message.row?.tokenKey !== context?.tokenKey) return;
+    if (context.recordingId && message.row.tokenIdentity?.recordingId !== context.recordingId) return;
     if (!H.isAttempt(message.row)) return;
-    rows = H.mergeRows(rows, [message.row]); liveAt = message.row.deliveredAt; render();
+    rows = H.mergeRows(rows, [message.row]); liveAt = message.row.deliveredAt; activity = message.activity ?? activity; render();
   });
   globalThis.AxiomLiquidityUI = {setContext(next) {
-    if ((next?.tokenKey ?? null) === (context?.tokenKey ?? null)) return;
-    context = next; rows = []; liveAt = null; archiveError = null; generation++; render(); hydrate();
-  }, inspect: () => ({rows, plotted, series: series.map(item => item.data()), connected: liveAt !== null && Date.now() - liveAt <= 12500})};
+    if ((next?.tokenKey ?? null) === (context?.tokenKey ?? null) && next?.recordingId === context?.recordingId) return;
+    context = next; rows = []; liveAt = null; activity = null; archiveError = null; generation++; render(); hydrate();
+  }, applyActivity(next, tokenKey) { if (tokenKey === context?.tokenKey) { activity = next; render(); } },
+    inspect: () => ({rows, activity, plotted, series: series.map(item => item.data()), connected: liveAt !== null && Date.now() - liveAt <= 12500})};
   setInterval(render, 1000);
   render();
 })();

@@ -1,5 +1,7 @@
 # Local liquidity history
 
+The existing recorder also powers [Liquidity Activity & Alerts](LIQUIDITY_ALERTS.md). Window summaries now stay within the latest uninterrupted page/context/currency run; revisiting an earlier pool or currency starts fresh comparison history without deleting older samples. Alert evidence/settings/checkpoints use the existing archive metadata, with independent bounded retention; no second liquidity collector or sample store is created.
+
 Liquidity history records **Axiom-reported liquidity** from the first monitoring attempt, without a token-age requirement, API, key, credits, backend, wallet connection or trading action. The existing manually requested historical-price feature is unchanged and never supplies liquidity observations.
 
 ## Collection and identity

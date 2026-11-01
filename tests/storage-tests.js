@@ -91,6 +91,8 @@
       assert((await archive.readLatest("token-a", "price")).samples.length > 0, "Liquidity pruning preserves the existing price archive");
       checks.push("liquidity browser restart timestamps", "liquidity null restoration", "liquidity age/count retention", "price archive preserved");
     }
+    await runTradingStorageChecks(phase, checks);
+    await runLiquidityAlertStorageChecks(phase, checks, liquidity);
     liquidity.close(); archive.close();
     document.body.dataset.testStatus = "passed";
     document.getElementById("results").textContent = JSON.stringify({phase, passed: checks.length, checks});

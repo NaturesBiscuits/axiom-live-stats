@@ -13,13 +13,14 @@
   let discoveryNeeded = true;
   const isStatLabel = node => node.nodeType === 1 && node.childElementCount === 0 &&
     (Object.values(labels).includes(clean(node.textContent)) ||
+      AxiomTokenInfo.labels.includes(clean(node.textContent)) ||
       /^(?:Holders\s*\([\d,]+\)|Bundlers|Top 10 H\.|Market\s?Cap|Mkt\s?Cap)$/i.test(clean(node.textContent)));
   function statSpans() {
     const route = AxiomTokenContextDetector.routeKey();
     const missing = cachedSpans.length === 0 || cachedSpans.some(node => !node.isConnected);
     if (route !== discoveryRoute || ((missing || discoveryNeeded) && Date.now() - lastDiscoveryAt >= 2500)) {
       cachedSpans = Array.from(document.querySelectorAll("span"))
-        .filter(node => isStatLabel(node) && !node.closest('[data-perf-id*="table"], [role="row"]'));
+        .filter(node => isStatLabel(node) && !node.closest('[data-perf-id*="table"], [role="row"], [data-perf-id="token-trades-panel"]'));
       discoveryRoute = route; lastDiscoveryAt = Date.now();
       discoveryNeeded = false;
     }
@@ -35,19 +36,7 @@
       .filter(Boolean).join(" ") || null;
   }
 
-  // Axiom's Token Info tiles put the percentage ABOVE the text label.
-  // Read the displayed percentage only within the matching tile; these
-  // are Axiom-reported metrics, not independent wallet calculations.
-  function readTokenInfoPercent(spans, label) {
-    const node = spans.find(el =>
-      el.childElementCount === 0 && clean(el.textContent) === label
-    );
-    const card = node?.parentElement?.parentElement;
-    if (!card || !card.getClientRects().length || card.closest('[hidden], [aria-hidden="true"]')) return null;
-    return Array.from(card.querySelectorAll("span"))
-      .map(el => clean(el.textContent))
-      .find(text => /^\d+(?:\.\d+)?%$/.test(text) && Number(text.slice(0, -1)) <= 100) ?? null;
-  }
+  const tokenInfoReader = AxiomTokenInfo.createReader();
 
   function collect() {
     const spans = statSpans();
@@ -58,13 +47,16 @@
     }
     const holdersNode = spans.find(el => /^Holders\s*\([\d,]+\)$/.test(clean(el.textContent)));
     stats.holders = clean(holdersNode?.textContent).match(/\(([\d,]+)\)/)?.[1] ?? null;
-    stats.bundlers = readTokenInfoPercent(spans, "Bundlers");
-    stats.top10Holders = readTokenInfoPercent(spans, "Top 10 H.");
-    if (stats.globalFees === null && stats.volume5m === null && stats.liquidity === null && stats.top10Holders === null) return null;
+    const tokenInfo = tokenInfoReader.read(spans, {routeKey: AxiomTokenContextDetector.routeKey()});
+    stats.bundlers = tokenInfo.tiles.bundlers.displayText;
+    stats.top10Holders = tokenInfo.tiles.top10Holders.displayText;
+    if (stats.globalFees === null && stats.volume5m === null && stats.liquidity === null &&
+        !Object.values(tokenInfo.tiles).some(tile => tile.status === "available") &&
+        tokenInfo.token.status !== "resolved" && tokenInfo.developer.status !== "resolved") return null;
     return {
       title: document.title || "Axiom token",
       url: location.origin + location.pathname,
-      capturedAt: Date.now(), marketObservedAt: Date.now(), stats
+      capturedAt: Date.now(), marketObservedAt: Date.now(), stats, tokenInfo
     };
   }
 
@@ -75,12 +67,17 @@
   let collecting = false;
   let tokenPending = false;
   let contextDiscoveryNeeded = true;
-  const identitySelector = '[data-token-mint], [data-mint-address], [data-token-address], [data-pool-address], [data-pair-address], [data-chain], [data-network], a[href*="geckoterminal.com/"], a[href*="scan.io/token/"], a[href*="scan.com/token/"], a[href*="scan.org/token/"]';
+  const identitySelector = '[data-token-mint], [data-mint-address], [data-token-address], [data-pool-address], [data-pair-address], [data-chain], [data-network], a[href*="geckoterminal.com/"], a[href*="solscan.io/account/"], a[href*="scan.io/token/"], a[href*="scan.com/token/"], a[href*="scan.org/token/"]';
   const rolling = AxiomRollingChart.createStore();
   const liveValues = AxiomLiveValueObserver.createReader((type, parsed, at, details) => rolling.observe(type, parsed, at, details));
   const liquidity = AxiomLiquidityHistory.createRecorder();
   const liquidityReader = AxiomLiveValueObserver.createReader(() => {}, Date.now, [["liquidity", ["liquidity"]]]);
   const pageKey = () => location.origin + location.pathname;
+  const tradeMonitor = AxiomTradeFeed.createMonitor(packet => {
+    try { chrome.runtime.sendMessage({type: "AXIOM_TRADES_UPDATE", packet}, () => { void chrome.runtime.lastError; }); }
+    catch { /* Source collection is independent of the dashboard. */ }
+  }, {ready: () => !tokenPending && !contextDiscoveryNeeded, contextNeeded: schedule});
+  const insideObservedFeed = node => holderMonitor.contains(node) || tradeMonitor.contains(node);
   const holderMonitor = AxiomHolderTableExtractor.createMonitor(() => {
     // Holder mutations use the last market reading; they do not rescan the page.
     if (!collecting && !tokenPending && !contextDiscoveryNeeded && marketSnapshot?.chartContext?.routeKey === AxiomTokenContextDetector.routeKey()) sendSnapshot();
@@ -89,10 +86,12 @@
 
   function sendSnapshot() {
     if (!marketSnapshot) return;
-    const snapshot = {...marketSnapshot, capturedAt: Date.now(), holdersIntelligence: holderMonitor.getState()};
+    const snapshot = {...marketSnapshot, capturedAt: Date.now(), holdersIntelligence: holderMonitor.getState(),
+      tradingContext: tradeMonitor.context(), tradingStatus: tradeMonitor.getState()};
     const fingerprint = JSON.stringify({
       title: snapshot.title, url: snapshot.url, stats: snapshot.stats,
-      holdersIntelligence: snapshot.holdersIntelligence, chartContext: snapshot.chartContext, liquidityContext: snapshot.liquidityContext
+      holdersIntelligence: snapshot.holdersIntelligence, chartContext: snapshot.chartContext, liquidityContext: snapshot.liquidityContext,
+      tokenInfo: snapshot.tokenInfo, tradingContext: snapshot.tradingContext, tradingStatus: snapshot.tradingStatus
     });
     if (fingerprint === lastFingerprint && Date.now() - lastSentAt < 3000) return;
     lastFingerprint = fingerprint;
@@ -111,14 +110,17 @@
     const previousContext = marketSnapshot?.chartContext;
     const snapshot = collect();
     // Clear the previous token even when the new route has not loaded its stats.
-    if (!snapshot && !marketSnapshot && !/^\/meme\//.test(location.pathname)) return;
+    if (!snapshot && !marketSnapshot && !/^\/meme\//.test(location.pathname) && !tradeMonitor.discover()) return;
     marketSnapshot = snapshot || {
       title: document.title || "Axiom", url: pageKey(), stats: Object.fromEntries(
         [...Object.keys(labels), "holders", "bundlers", "top10Holders"].map(key => [key, null])
       )
     };
-    marketSnapshot.chartContext = !contextDiscoveryNeeded && previousContext?.routeKey === AxiomTokenContextDetector.routeKey() ?
-      previousContext : AxiomTokenContextDetector.detect();
+    const explicitToken = marketSnapshot.tokenInfo?.token;
+    const identityFingerprint = JSON.stringify([explicitToken?.status, explicitToken?.candidates]);
+    marketSnapshot.chartContext = !contextDiscoveryNeeded && previousContext?.routeKey === AxiomTokenContextDetector.routeKey() &&
+      previousContext.tokenInfoFingerprint === identityFingerprint ? previousContext :
+      {...AxiomTokenContextDetector.detect(document, location, explicitToken, marketSnapshot.tokenInfo), tokenInfoFingerprint: identityFingerprint};
     contextDiscoveryNeeded = false;
     // Chain/mint/pool query changes also delimit holder sessions without storing unrelated queries.
     marketSnapshot.tokenKey = marketSnapshot.chartContext.routeKey;
@@ -130,6 +132,7 @@
     liquidityReader.setToken(marketSnapshot.chartContext.sourceKey);
     liquidityReader.bind(cachedSpans.filter(node => node.isConnected));
     tokenPending = false;
+    tradeMonitor.setContext(marketSnapshot.chartContext);
     collecting = true;
     try {
       holderMonitor.setContext(marketSnapshot.tokenKey, marketSnapshot.stats.holders, Boolean(snapshot), marketSnapshot.chartContext);
@@ -146,25 +149,27 @@
   }
 
   const marketObserver = new MutationObserver(records => {
-    const identityChanged = records.some(record => !holderMonitor.contains(record.target) &&
-      ((record.type === "attributes" && /^data-(?:token|mint|pool|pair|chain|network)/.test(record.attributeName)) ||
+    const identityChanged = records.some(record => !insideObservedFeed(record.target) &&
+      ((record.type === "attributes" && (/^data-(?:token|mint|pool|pair|chain|network)/.test(record.attributeName) ||
+        record.attributeName === "href" && record.target.matches(identitySelector))) ||
         [...(record.addedNodes ?? []), ...(record.removedNodes ?? [])].some(node =>
           node.matches?.(identitySelector) || node.querySelector?.(identitySelector))));
     if (identityChanged) contextDiscoveryNeeded = true;
-    if (records.some(record => !holderMonitor.contains(record.target) &&
+    if (records.some(record => !insideObservedFeed(record.target) &&
       Array.from(record.addedNodes ?? []).some(node => isStatLabel(node) ||
         Array.from(node.querySelectorAll?.("span") ?? []).some(isStatLabel)))) discoveryNeeded = true;
     if (marketSnapshot?.chartContext.routeKey !== AxiomTokenContextDetector.routeKey() ||
         identityChanged) {
       tokenPending = true;
     }
-    if (!tokenPending) { liveValues.mutations(records); liquidityReader.mutations(records); }
+    const marketRecords = records.filter(record => !insideObservedFeed(record.target));
+    if (!tokenPending) { liveValues.mutations(marketRecords); liquidityReader.mutations(marketRecords); }
     // The separate scoped observer handles holder rows, including recycled nodes.
-    if (records.some(record => !holderMonitor.contains(record.target))) schedule();
+    if (marketRecords.length) schedule();
   });
   marketObserver.observe(document.documentElement, {
     childList: true, subtree: true, characterData: true, attributes: true,
-    attributeFilter: ["hidden", "aria-hidden", "aria-selected", "data-token-mint", "data-mint-address", "data-token-address", "data-pool-address", "data-pair-address", "data-chain", "data-network"]
+    attributeFilter: ["hidden", "aria-hidden", "aria-selected", "href", "title", "data-token-mint", "data-mint-address", "data-token-address", "data-pool-address", "data-pair-address", "data-chain", "data-network"]
   });
   window.addEventListener("popstate", schedule);
   window.addEventListener("hashchange", schedule);
@@ -217,6 +222,7 @@
   window.addEventListener("pagehide", () => {
     marketObserver.disconnect();
     holderMonitor.disconnect();
+    tradeMonitor.disconnect();
     clearTimeout(pendingTimer);
     pendingTimer = null;
     clearInterval(heartbeat);
@@ -224,13 +230,14 @@
     clearTimeout(liquidityTimer);
     try { chrome.runtime.sendMessage({type: "AXIOM_DOM_CHART_FLUSH"}, () => { void chrome.runtime.lastError; }); }
     catch { /* Best effort navigation flush; normal persistence is batched. */ }
+    try { chrome.runtime.sendMessage({type: "AXIOM_TRADES_FLUSH"}, () => { void chrome.runtime.lastError; }); } catch { /* Best effort. */ }
   });
   // A back/forward-cache restore must resume observation without duplicate timers.
   window.addEventListener("pageshow", event => {
     if (!event.persisted) return;
     marketObserver.observe(document.documentElement, {
       childList: true, subtree: true, characterData: true, attributes: true,
-      attributeFilter: ["hidden", "aria-hidden", "aria-selected", "data-token-mint", "data-mint-address", "data-token-address", "data-pool-address", "data-pair-address", "data-chain", "data-network"]
+      attributeFilter: ["hidden", "aria-hidden", "aria-selected", "href", "title", "data-token-mint", "data-mint-address", "data-token-address", "data-pool-address", "data-pair-address", "data-chain", "data-network"]
     });
     heartbeat = setInterval(schedule, 2500);
     schedule();

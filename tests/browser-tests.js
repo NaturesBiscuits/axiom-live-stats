@@ -42,6 +42,7 @@
   };
   let monitor;
   try {
+    await TokenInfoBrowserTests.extraction(test, assert, fixture);
     await test("Cached DOM reads remain fresh without inventing price changes, decode HTML subscripts and guard token transitions", async () => {
       fixture.innerHTML = '<div><span>Price</span><span>$0.1</span></div><div><span>Market Cap</span><span>$10M</span></div>';
       let clock = 100000;
@@ -421,8 +422,9 @@
         ["Supply", "1B"], ["ATH", "$0.002"], ["5m Vol", "$4K"], ["Buys", "10 / $3K"],
         ["Sells", "5 / $1K"], ["Net Vol.", "+$2K"]
       ].map(([label, value]) => `<div><span>${label}</span><span>${value}</span></div>`).join("") +
-        '<button role="tab"><span>Holders (1,234)</span></button><div><div><span>12.5%</span></div><div><span>Bundlers</span></div></div>' +
-        await (await fetch("fixtures/top-ten-holders.html")).text();
+        '<button role="tab"><span>Holders (1,234)</span></button>' +
+        // Deliberately change two capture values: extraction must use the live DOM.
+        (await (await fetch("fixtures/token-info.html")).text()).replace("24.61%", "14.05%").replace("29.62%", "12.5%");
       window.chrome = {runtime: {sendMessage(message, callback) { sent.push(message); callback?.(); }}};
       await loadScript(document, "../content.js");
       await pause(620);
@@ -434,6 +436,10 @@
       }
       assert(snapshot.holdersIntelligence.totalReported === 1234 && snapshot.holdersIntelligence.renderedBundlers === 1, "Holder snapshot attached");
       assert(snapshot.holdersIntelligence.tokenKey === snapshot.tokenKey, "Token association");
+      assert(snapshot.tokenInfo.tiles.developerHoldings.value === 0 && snapshot.tokenInfo.tiles.holderCount.value === 181 && snapshot.stats.holders === "1,234", "Separate tile and tab sources carried in one snapshot");
+      assert(snapshot.tokenInfo.token.address === "8vhj28i4FS87DQWac3uMr54vfrX7nin1SnSFuyc6pump" &&
+        snapshot.tokenInfo.developer.address === "Fe5i9MriTnRYbDJiZeUn2isJsx6zQkanzw7HisZj4uJi" && snapshot.tokenInfo.funding.relativeAgeText === "9mo", "Token/developer/funding flow through real content script");
+      assert(snapshot.chartContext.mintAddress === snapshot.tokenInfo.token.address && snapshot.chartContext.poolAddress === null, "Explicit CA reconciled with chart context");
     });
     await test("Top 10 holder tile reads its own percentage, updates zero and clears invalid or hidden values", async () => {
       const label = [...document.querySelectorAll("#market span")].find(node => node.textContent === "Top 10 H.");
@@ -456,11 +462,13 @@
         return original.call(this, selector);
       };
       const before = statsMessages().length;
+      const infoObservedAt = statsMessages().at(-1).snapshot.tokenInfo.observedAt;
       fixture.firstElementChild.querySelector('img[alt="Bundler"]').alt = "Sniper";
       await pause(230);
       document.querySelectorAll = original;
       assert(scans === 0, "No document-wide market scan for holder mutation");
       assert(statsMessages().length === before + 1 && statsMessages().at(-1).snapshot.holdersIntelligence.renderedBundlers === 0, "Changed holder snapshot published once");
+      assert(statsMessages().at(-1).snapshot.tokenInfo.observedAt === infoObservedAt, "Holder-only messages do not renew Token Info observation time");
     });
     await test("Selected-view attribute changes propagate without changing holder row markup", async () => {
       const tab = document.createElement("button"); tab.setAttribute("role", "tab"); tab.textContent = "Top Traders";
@@ -540,10 +548,16 @@
       dashboardFixture = {doc, win: iframe.contentWindow, dispatchStorage, runtimeListeners};
       await loadScript(doc, new URL("../rollingChartCollector.js", location.href).href);
       await loadScript(doc, new URL("../holderTableExtractor.js", location.href).href);
+      await loadScript(doc, new URL("../tokenInfoExtractor.js", location.href).href);
+      await loadScript(doc, new URL("../tokenInfoDashboard.js", location.href).href);
+      await loadScript(doc, new URL("../tradingParticipation.js", location.href).href);
+      await loadScript(doc, new URL("../tradingDashboard.js", location.href).href);
       await loadScript(doc, new URL("../holderConcentration.js", location.href).href);
       await loadScript(doc, new URL("../vendor/lightweight-charts.standalone.production.js", location.href).href);
       await loadScript(doc, new URL("../chartView.js", location.href).href);
       await loadScript(doc, new URL("../liquidityHistory.js", location.href).href);
+      await loadScript(doc, new URL("../liquidityAlerts.js", location.href).href);
+      await loadScript(doc, new URL("../liquidityAlertDashboard.js", location.href).href);
       await loadScript(doc, new URL("../liquidityDashboard.js", location.href).href);
       await loadScript(doc, new URL("../chartDataCollector.js", location.href).href);
       await loadScript(doc, new URL("../historicalChart.js", location.href).href);
@@ -575,8 +589,10 @@
       snapshot.tokenKey = snapshot.url;
       dispatchStorage({latestSnapshot: {newValue: snapshot}});
       assert(!doc.querySelector(".bundler-badge") && doc.querySelector(".empty-holders"), "Mismatched token data cleared");
-      dispatchStorage({latestSnapshot: {newValue: {...snapshot, stats: {...snapshot.stats, top10Holders: null}}}});
-      assert(doc.getElementById("top10Holders").textContent === "—", "Unavailable top-holder data clears the dashboard value");
+      dispatchStorage({latestSnapshot: {newValue: {...snapshot, stats: {...snapshot.stats, top10Holders: null}, tokenInfo: {
+        ...snapshot.tokenInfo, tiles: {...snapshot.tokenInfo.tiles, top10Holders: {...snapshot.tokenInfo.tiles.top10Holders, value: null, displayText: null, status: "missing"}}
+      }}}});
+      assert(doc.getElementById("top10Holders").textContent === "Unavailable", "Unavailable top-holder data clears the dashboard value");
       window.dispatchEvent(new Event("pagehide"));
     });
     await test("Concentration dashboard separates Axiom-reported values, partial sums, exclusions, sort and session coverage", () => {
@@ -840,6 +856,8 @@
       assert(calls === before && doc.getElementById("historyResults").hidden, "Late response cannot populate another token");
       win.AxiomChartData = original;
     });
+    await TokenInfoBrowserTests.dashboard(test, assert, dashboardFixture);
+    await LiquidityAlertBrowserTests.run(test, assert, dashboardFixture);
     assert(!scriptErrors.length, scriptErrors.join("; "));
     document.getElementById("results").textContent = JSON.stringify({passed: results.length, tests: results});
     document.body.dataset.testStatus = "passed";

@@ -22,16 +22,16 @@
       status: parsed ? "valid" : !text || /^(?:—|--?|N\/?A)$/i.test(text) ? "missing" : "invalid"};
   }
   function createRecorder({now = Date.now, sessionId = globalThis.crypto?.randomUUID?.() ?? String(Math.random())} = {}) {
-    let context = null, inputKey = null, epoch = 0, nextDue = 0;
+    let context = null, inputKey = null, epoch = 0, nextDue = 0, currencyEpoch = 0, lastCurrency = null;
     return {
       setContext(next) {
         if (!next?.sourceKey) return;
         if (next.sourceKey === inputKey) return;
-        inputKey = next.sourceKey; epoch++; nextDue = 0;
+        inputKey = next.sourceKey; epoch++; nextDue = 0; currencyEpoch = 0; lastCurrency = null;
         const resolved = !next.conflict && next.blockchain && next.mintAddress && next.poolAddress;
         const identityStatus = next.conflict ? "conflict" : resolved ? "resolved" : "unresolved";
         // Unknown pools are scoped to this uninterrupted page/context session, never guessed.
-        context = {...next, identityStatus, tokenKey: JSON.stringify(["liquidity-v1", next.sourceKey,
+        context = {...next, identityStatus, recordingId: `${sessionId}:${epoch}`, tokenKey: JSON.stringify(["liquidity-v1", next.sourceKey,
           resolved ? null : `${sessionId}:${epoch}`])};
       },
       context: () => context,
@@ -42,7 +42,12 @@
         const attempt = read(); // Must execute a fresh bounded DOM read for this attempt.
         const amount = parseAmount(attempt?.displayText);
         const status = context.conflict ? "identity-conflict" : attempt?.status === "awaiting-token" ? "awaiting-token" : amount.status;
+        if (status === "valid") {
+          if (lastCurrency !== null && lastCurrency !== amount.unit) currencyEpoch++;
+          lastCurrency = amount.unit;
+        }
         return {...amount, status, value: status === "valid" ? amount.value : null,
+          continuityId: `${context.recordingId}:${currencyEpoch}`,
           tokenKey: context.tokenKey, tokenIdentity: {...context}, valueType: "liquidity", source: SOURCE,
           timestamp: Math.floor(at / 1000), sampledAt: at, domReadAt: attempt?.domReadAt ?? at,
           observedAt: status === "valid" ? attempt?.domReadAt ?? at : null, sourceHidden, gap: false};
@@ -51,7 +56,7 @@
   }
   const valid = row => row?.status === "valid" && Number.isFinite(row.value) && row.value >= 0;
   const percent = (first, last) => {
-    const result = first > 0 ? (last / first - 1) * 100 : null;
+    const result = first > 0 ? (last - first) / first * 100 : null;
     return Number.isFinite(result) ? result : null;
   };
   const seriesKey = row => JSON.stringify([row.tokenKey, row.unit]);
@@ -76,7 +81,8 @@
   }
   function analyze(attempts) {
     if (new Set(attempts.map(seriesKey)).size > 1) throw new Error("Analyze one token/pool/currency series at a time.");
-    const rows = mergeRows(attempts), observations = rows.filter(valid), first = observations[0], latest = observations.at(-1);
+    const merged = mergeRows(attempts), continuity = merged.at(-1)?.continuityId;
+    const rows = merged.filter(row => row.continuityId === continuity), observations = rows.filter(valid), first = observations[0], latest = observations.at(-1);
     const durationMs = first && latest ? latest.domReadAt - first.domReadAt : 0;
     // Coverage counts occupied expected-cadence slots, never manufactured observations.
     const start = rows[0]?.sampledAt;
@@ -100,7 +106,7 @@
     const groups = []; let group = null;
     for (const row of rows) {
       if (!valid(row)) { group = null; continue; }
-      if (!group || row.sampledAt - group.at(-1).sampledAt > GAP_MS || seriesKey(row) !== seriesKey(group.at(-1))) {
+      if (!group || row.sampledAt - group.at(-1).sampledAt > GAP_MS || seriesKey(row) !== seriesKey(group.at(-1)) || row.continuityId !== group.at(-1).continuityId) {
         group = []; groups.push(group);
       }
       group.push(row);

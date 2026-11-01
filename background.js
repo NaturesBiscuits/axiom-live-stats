@@ -4,6 +4,66 @@
 importScripts("rollingChartCollector.js");
 importScripts("sampleArchive.js");
 importScripts("liquidityHistory.js");
+importScripts("liquidityAlerts.js");
+importScripts("holderTableExtractor.js");
+importScripts("tradingParticipation.js");
+importScripts("tradingArchive.js");
+const tradingArchive = AxiomTradingArchive.createArchive();
+const tradingLive = AxiomTrading.createStore();
+const tradingPending = new Map(), tradingCoverage = new Map(), tradingPendingLosses = new Map();
+const tradingDirtyCoverage = new Set();
+let tradingQueue = Promise.resolve(), tradingTimer = null, tradingError = null, tradingGlobalLoss = null;
+function broadcastTrading(packet) {
+  try { chrome.runtime.sendMessage({type: "AXIOM_TRADES_LIVE", ...packet}, () => { void chrome.runtime.lastError; }); }
+  catch { /* Dashboard can remain closed while the source and worker collect. */ }
+}
+function scheduleTradingPersistence() {
+  if (tradingTimer === null) tradingTimer = setTimeout(() => { tradingTimer = null; flushTrading(); }, 15000);
+}
+function flushTrading() {
+  clearTimeout(tradingTimer); tradingTimer = null;
+  tradingQueue = tradingQueue.catch(() => {}).then(async () => {
+    let writeError = null;
+    for (const tokenKey of new Set([...tradingDirtyCoverage, ...[...tradingPending.values()].map(row => row.tokenKey)])) {
+      const coverage = tradingCoverage.get(tokenKey) ?? null;
+      const rows = [...tradingPending.values()].filter(row => row.tokenKey === tokenKey);
+      try {
+        await tradingArchive.write(rows, coverage, [...tradingPendingLosses.values(), ...(tradingGlobalLoss ? [{...tradingGlobalLoss, tokenKey: "*"}] : [])]);
+        for (const row of rows) if (tradingPending.get(AxiomTrading.eventKey(row)) === row) tradingPending.delete(AxiomTrading.eventKey(row));
+        tradingDirtyCoverage.delete(tokenKey);
+      } catch (error) { writeError = error.message; }
+    }
+    tradingError = writeError;
+    broadcastTrading({archiveStatus: {error: tradingError, pending: tradingPending.size}});
+    if (tradingPending.size || tradingDirtyCoverage.size) scheduleTradingPersistence();
+  });
+  return tradingQueue;
+}
+function receiveTrading(packet, sender) {
+  tradingQueue = tradingQueue.catch(() => {}).then(() => {
+    if (!packet?.context?.tokenKey || !Array.isArray(packet.events) || packet.events.length > 500 ||
+        packet.coverage?.tokenKey !== packet.context.tokenKey || typeof packet.context.tokenKey !== "string" || packet.context.tokenKey.length > 4096) return;
+    const now = Date.now();
+    const valid = packet.events.filter(row => row.tokenKey === packet.context.tokenKey && row.context?.sourceKey === packet.context.sourceKey && AxiomTrading.isEvent(row, now))
+      .map(row => ({...row, deliveredAt: now, sourceTabId: sender.tab.id}));
+    const rows = tradingLive.ingest(valid);
+    for (const row of rows) tradingPending.set(AxiomTrading.eventKey(row), row);
+    while (tradingPending.size > 5000) {
+      const key = tradingPending.keys().next().value, row = tradingPending.get(key); tradingPending.delete(key);
+      tradingPendingLosses.set(row.tokenKey, AxiomTrading.mergeLoss(tradingPendingLosses.get(row.tokenKey), AxiomTrading.lossFor(row, "pending-write-cap")));
+    }
+    while (tradingPendingLosses.size > 64) { const key = tradingPendingLosses.keys().next().value; tradingGlobalLoss = AxiomTrading.mergeLoss(tradingGlobalLoss, tradingPendingLosses.get(key)); tradingPendingLosses.delete(key); }
+    const prior = tradingCoverage.get(packet.context.tokenKey);
+    tradingCoverage.delete(packet.context.tokenKey);
+    const coverage = AxiomTrading.mergeCoverage(prior, {...packet.coverage, sourceTabId: sender.tab.id});
+    tradingCoverage.set(packet.context.tokenKey, coverage);
+    tradingDirtyCoverage.add(packet.context.tokenKey);
+    while (tradingCoverage.size > 64) { const key = tradingCoverage.keys().next().value; tradingCoverage.delete(key); tradingDirtyCoverage.delete(key); }
+    scheduleTradingPersistence();
+    broadcastTrading({tokenKey: packet.context.tokenKey, events: rows, coverage, losses: [...tradingLive.status(packet.context.tokenKey).losses,
+      tradingPendingLosses.get(packet.context.tokenKey), tradingGlobalLoss].filter(Boolean), archiveStatus: {error: tradingError, pending: tradingPending.size}});
+  }).catch(error => { tradingError = error.message; });
+}
 let opening = null;
 const rollingCharts = AxiomRollingChart.createStore();
 const archive = AxiomSampleArchive.createArchive();
@@ -13,7 +73,27 @@ const liquidityArchive = AxiomSampleArchive.createArchive({databaseName: "axiom-
   validateRow: AxiomLiquidityHistory.isAttempt});
 const liquidityRows = new Map();
 let liquidityError = null;
-const liquidityLoaded = liquidityArchive.getSettings().catch(error => { liquidityError = error.message; });
+const liquidityAlerts = AxiomLiquidityAlerts.createEngine();
+let liquidityAlertError = null, liquidityAlertsDirty = false, liquidityAlertsRevision = 0, liquidityAlertsReady = false, liquidityAlertsLoading = null;
+async function loadLiquidityAlerts() {
+  if (liquidityAlertsReady) return;
+  if (!liquidityAlertsLoading) liquidityAlertsLoading = liquidityArchive.getMeta("activity-v1").then(saved => {
+    liquidityAlerts.restore(saved); liquidityAlertsReady = true; liquidityAlertError = null;
+  }).finally(() => { liquidityAlertsLoading = null; });
+  return liquidityAlertsLoading;
+}
+const liquidityLoaded = Promise.all([
+  liquidityArchive.getSettings().catch(error => { liquidityError = error.message; }),
+  loadLiquidityAlerts().catch(error => { liquidityAlertError = error.message; })]);
+function alertSnapshot(tokenKey) { return {...liquidityAlerts.view(tokenKey), error: liquidityAlertError, ruleLoaded: liquidityAlertsReady}; }
+async function persistLiquidityAlerts() {
+  if (!liquidityAlertsDirty) return;
+  const revision = liquidityAlertsRevision;
+  await liquidityArchive.setMeta("activity-v1", liquidityAlerts.exportState());
+  if (revision === liquidityAlertsRevision) liquidityAlertsDirty = false;
+  liquidityAlertError = null;
+}
+function dirtyLiquidityAlerts() { liquidityAlertsDirty = true; liquidityAlertsRevision++; chartDirty = true; schedulePersistence(); }
 let archiveError = null;
 let archiveConfig = {...AxiomSampleArchive.DEFAULTS};
 let archiveStats = {count: 0};
@@ -49,9 +129,10 @@ function flushCharts() {
     try {
       const batch = [...pendingRecords.values()];
       const batches = [batch.filter(row => row.valueType !== "liquidity"), batch.filter(row => row.valueType === "liquidity")];
-      const results = await Promise.allSettled(batches.map((rows, index) => rows.length ?
-        (index ? liquidityArchive : archive).write(rows) : Promise.resolve()));
+      const results = await Promise.allSettled([...batches.map((rows, index) => rows.length ?
+        (index ? liquidityArchive : archive).write(rows) : Promise.resolve()), persistLiquidityAlerts()]);
       for (const [index, result] of results.entries()) {
+        if (index === 2) { if (result.status === "rejected") liquidityAlertError = result.reason.message; continue; }
         if (result.status === "fulfilled") {
           for (const row of batches[index]) if (pendingRecords.get(recordKey(row)) === row) pendingRecords.delete(recordKey(row));
         }
@@ -61,7 +142,7 @@ function flushCharts() {
         }
       }
       archiveStats = await archive.stats();
-      chartDirty = pendingRecords.size > 0;
+      chartDirty = pendingRecords.size > 0 || liquidityAlertsDirty;
       broadcastArchiveStatus();
       if (chartDirty) schedulePersistence();
     } catch (error) {
@@ -88,26 +169,37 @@ function receiveLiquidity(row, sender) {
     await liquidityLoaded;
     const receivedAt = Date.now();
     if (!AxiomLiquidityHistory.isAttempt(row, receivedAt)) return;
+    if (!liquidityAlertsReady) try { await loadLiquidityAlerts(); } catch (error) { liquidityAlertError = error.message; }
     const delivered = {...row, deliveredAt: receivedAt, sourceTabId: sender.tab.id};
     const key = recordKey(row), old = pendingRecords.get(key);
     if (old && old.sampledAt > row.sampledAt) return;
     const group = AxiomLiquidityHistory.seriesKey(row);
-    const previous = liquidityRows.get(group);
+    let previous = liquidityRows.get(group);
+    if (!previous) {
+      try { previous = (await liquidityArchive.readLatest(row.tokenKey, "liquidity", null,
+        {windowSeconds: 86400, maxRows: AxiomLiquidityHistory.MAX_RECORDS, allUnits: true})).samples
+        .filter(item => item.unit === row.unit).map(item => ({...item, restored: true, deliveredAt: null})); }
+      catch (error) { liquidityError = error.message; }
+    }
+    const alreadyRecorded = previous?.some(item => AxiomLiquidityAlerts.scopeKey(item) === AxiomLiquidityAlerts.scopeKey(delivered) && item.sampledAt >= row.sampledAt);
     liquidityRows.delete(group);
     liquidityRows.set(group, AxiomLiquidityHistory.mergeRows(previous, [delivered])
       .filter(item => item.sampledAt >= receivedAt - 86400000).slice(-AxiomLiquidityHistory.MAX_RECORDS));
     while (liquidityRows.size > AxiomLiquidityHistory.MAX_SERIES) liquidityRows.delete(liquidityRows.keys().next().value);
     trimLiquidityRows(receivedAt);
+    const attempts = [...liquidityRows.values()].flat().filter(item => item.tokenKey === row.tokenKey);
+    if (liquidityAlertsReady && !alreadyRecorded && liquidityAlerts.observe(delivered, attempts, receivedAt).changed) dirtyLiquidityAlerts();
     pendingRecords.set(key, delivered);
     while (pendingRecords.size > 5000) { pendingRecords.delete(pendingRecords.keys().next().value); droppedRecords++; }
     chartDirty = true; schedulePersistence();
-    try { chrome.runtime.sendMessage({type: "AXIOM_LIQUIDITY_LIVE", row: delivered}, () => { void chrome.runtime.lastError; }); }
+    try { chrome.runtime.sendMessage({type: "AXIOM_LIQUIDITY_LIVE", row: delivered, activity: alertSnapshot(row.tokenKey)}, () => { void chrome.runtime.lastError; }); }
     catch { /* The dashboard may be closed; collection and persistence continue. */ }
   }).catch(error => { liquidityError = error.message; });
 }
 
 function broadcastArchiveStatus() {
   try { chrome.runtime.sendMessage({type: "AXIOM_LIQUIDITY_ARCHIVE_STATUS", error: liquidityError,
+    alertError: liquidityAlertError,
     pendingCount: [...pendingRecords.values()].filter(row => row.valueType === "liquidity").length,
     droppedRecords}, () => { void chrome.runtime.lastError; }); }
   catch { /* No open dashboard. */ }
@@ -173,9 +265,41 @@ async function ensureDashboard(activate = false) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "AXIOM_LIQUIDITY_ALERT_SETTINGS") {
+    if (sender.url !== chrome.runtime.getURL("dashboard.html")) return;
+    chartQueue = chartQueue.catch(() => {}).then(async () => {
+      await liquidityLoaded;
+      await loadLiquidityAlerts();
+      liquidityAlerts.setSettings(message.settings); dirtyLiquidityAlerts();
+      try { await persistLiquidityAlerts(); }
+      catch (error) { liquidityAlertError = error.message; }
+      const activity = alertSnapshot(message.tokenKey);
+      sendResponse({ok: true, activity});
+      try { chrome.runtime.sendMessage({type: "AXIOM_LIQUIDITY_ALERT_SETTINGS_LIVE", settings: activity.settings}, () => { void chrome.runtime.lastError; }); } catch { /* No dashboard. */ }
+    }).catch(error => sendResponse({ok: false, error: error.message}));
+    return true;
+  }
+  if (message?.type === "AXIOM_TRADES_GET") {
+    if (sender.url !== chrome.runtime.getURL("dashboard.html") || typeof message.tokenKey !== "string" || message.tokenKey.length > 4096) return;
+    tradingQueue = tradingQueue.catch(() => {}).then(async () => {
+      let saved = {events: [], coverage: null, losses: []};
+      try { saved = await tradingArchive.read(message.tokenKey); if (!tradingPending.size && !tradingDirtyCoverage.size) tradingError = null; } catch (error) { tradingError = error.message; }
+      sendResponse({ok: true, ...saved, events: AxiomTrading.mergeRows(saved.events, tradingLive.rows(message.tokenKey)),
+        coverage: AxiomTrading.mergeCoverage(saved.coverage, tradingCoverage.get(message.tokenKey)),
+        losses: [...saved.losses, ...tradingLive.status(message.tokenKey).losses, tradingPendingLosses.get(message.tokenKey), tradingGlobalLoss].filter(Boolean),
+        archiveStatus: {error: tradingError, pending: tradingPending.size}, retentionMs: AxiomTrading.RETENTION_MS, maxRecords: AxiomTrading.MAX_RECORDS});
+    }).catch(error => sendResponse({ok: false, error: error.message}));
+    return true;
+  }
+  if (["AXIOM_TRADES_UPDATE", "AXIOM_TRADES_FLUSH"].includes(message?.type)) {
+    if (typeof sender.tab?.id !== "number" || !sender.url?.startsWith("https://axiom.trade/")) return;
+    if (message.type === "AXIOM_TRADES_UPDATE") receiveTrading(message.packet, sender); else void flushTrading();
+    return;
+  }
   if (message?.type === "AXIOM_LIQUIDITY_GET") {
     if (sender.url !== chrome.runtime.getURL("dashboard.html") || typeof message.tokenKey !== "string") return;
     void Promise.all([liquidityLoaded, chartQueue, persistence]).then(async () => {
+      if (!liquidityAlertsReady) try { await loadLiquidityAlerts(); } catch (error) { liquidityAlertError = error.message; }
       let saved = [];
       try {
         saved = (await liquidityArchive.readLatest(message.tokenKey, "liquidity", null,
@@ -183,8 +307,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         liquidityError = null;
       } catch (error) { liquidityError = error.message; }
       trimLiquidityRows();
-      const live = [...liquidityRows.values()].flat().filter(row => row.tokenKey === message.tokenKey);
+      const live = [...liquidityRows.values()].flat().filter(row => row.tokenKey === message.tokenKey && !row.restored);
       sendResponse({ok: true, saved, live, error: liquidityError,
+        activity: alertSnapshot(message.tokenKey),
         retentionHours: AxiomLiquidityHistory.RETENTION_HOURS, maxRecords: AxiomLiquidityHistory.MAX_RECORDS});
     }).catch(error => sendResponse({ok: false, error: error.message}));
     return true;
@@ -227,7 +352,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       latestSnapshot: message.snapshot,
       sourceTabId: sender.tab.id
     });
-    await ensureDashboard(false);
+    const {dashboardAutoOpened} = await chrome.storage.session.get("dashboardAutoOpened");
+    if (!dashboardAutoOpened) {
+      await ensureDashboard(false);
+      await chrome.storage.session.set({dashboardAutoOpened: true});
+    }
   })().catch(error => console.warn("Axiom Live Stats:", error));
 });
 

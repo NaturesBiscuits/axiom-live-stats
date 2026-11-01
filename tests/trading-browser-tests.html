@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Trading Participation browser regressions</title>
+<style>
+  #feed{width:600px;min-height:500px} [data-perf-id="token-trades-panel"]{width:500px;min-height:480px}
+  [data-layout="compact"]{position:relative!important;transform:none!important;min-height:24px}
+  [data-layout="compact"]>div:last-child{display:flex} .hidden{display:none}
+  @media(min-width:640px){.sm\:flex{display:flex}}
+</style>
+<div id="market"></div><div id="feed"></div><pre id="results">Running</pre>
+<script src="../holderTableExtractor.js"></script><script src="../tokenInfoExtractor.js"></script>
+<script src="../tokenContextDetector.js"></script><script src="../rollingChartCollector.js"></script>
+<script src="../liveValueObserver.js"></script><script src="../liquidityHistory.js"></script>
+<script src="../tradingParticipation.js"></script><script src="../tradeFeedExtractor.js"></script>
+<script src="trading-browser-tests.js"></script>

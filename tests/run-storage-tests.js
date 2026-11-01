@@ -18,5 +18,8 @@ const profile = mkdtempSync(join(tmpdir(), "axiom-indexeddb-tests-"));
   }
 } finally {
   if (resolve(profile).startsWith(resolve(tmpdir()) + "\\axiom-indexeddb-tests-") ||
-      resolve(profile).startsWith(resolve(tmpdir()) + "/axiom-indexeddb-tests-")) rmSync(profile, {recursive: true, force: true, maxRetries: 5, retryDelay: 100});
+      resolve(profile).startsWith(resolve(tmpdir()) + "/axiom-indexeddb-tests-")) {
+    try { rmSync(profile, {recursive: true, force: true, maxRetries: 5, retryDelay: 100}); }
+    catch (error) { console.error(`Temporary browser profile cleanup failed: ${error.message}`); process.exitCode = 1; }
+  }
 } })().catch(error => { console.error(error); process.exitCode = 1; });

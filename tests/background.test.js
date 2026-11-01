@@ -15,12 +15,14 @@ function worker(stored = {}, localSaved = {}, options = {}) {
   const created = [], updated = [], warnings = [], broadcasts = [], localWrites = [], archiveWrites = [], imports = [];
   localSaved.archiveRows ||= []; localSaved.archiveMeta ||= {};
   localSaved.liquidityRows ||= []; localSaved.liquidityMeta ||= {};
+  localSaved.tradeRows ||= []; localSaved.tradeCoverage ||= {};
+  const Trading = require("../tradingParticipation.js");
   const Archive = require("../sampleArchive.js");
   const fakeArchive = (liquidity = false) => {
     const records = liquidity ? "liquidityRows" : "archiveRows", meta = liquidity ? "liquidityMeta" : "archiveMeta";
     return {
-    getMeta: async key => localSaved[meta][key],
-    setMeta: async (key, value) => { localSaved[meta][key] = value; },
+    getMeta: async key => { if (key === "activity-v1" && options.failAlertReads) throw new Error("Alert metadata read fixture failure"); return localSaved[meta][key]; },
+    setMeta: async (key, value) => { if (key === "activity-v1" && options.failAlerts) throw new Error("Alert metadata fixture failure"); localSaved[meta][key] = structuredClone(value); },
     getSettings: async () => localSaved[meta].settings || Archive.DEFAULTS,
     setSettings: async value => (localSaved[meta].settings = Archive.settings(value)),
     stats: async () => ({count: localSaved[records].length}),
@@ -44,6 +46,17 @@ function worker(stored = {}, localSaved = {}, options = {}) {
     importScripts(name) { imports.push(name); },
     AxiomSampleArchive: {...Archive, createArchive: options => fakeArchive(options?.databaseName === "axiom-liquidity-v1")},
     AxiomLiquidityHistory: require("../liquidityHistory.js"),
+    AxiomLiquidityAlerts: {...require("../liquidityAlerts.js"), createEngine: () => require("../liquidityAlerts.js").createEngine({now: () => clock})},
+    AxiomTrading: {...Trading, createStore: () => Trading.createStore({now: () => clock})},
+    AxiomTradingArchive: {createArchive: () => ({
+      async write(rows, coverage) {
+        if (options.failTrading) throw new Error("Trading disk fixture failure");
+        localSaved.tradeRows = Trading.mergeRows(localSaved.tradeRows, rows);
+        if (coverage) localSaved.tradeCoverage[coverage.tokenKey] = structuredClone(coverage);
+      },
+      async read(key) { if (options.failTrading) throw new Error("Trading disk fixture failure");
+        return {events: localSaved.tradeRows.filter(row => row.tokenKey === key), coverage: localSaved.tradeCoverage[key], losses: []}; }
+    })},
     AxiomRollingChart: {createStore: () => require("../rollingChartCollector.js").createStore({now: () => clock})}, chrome: {
     runtime: {getURL: () => url, onMessage: {addListener: callback => { onMessage = callback; }},
       sendMessage(message, callback) { broadcasts.push(message); callback?.(); }},
@@ -55,7 +68,7 @@ function worker(stored = {}, localSaved = {}, options = {}) {
       set: async values => Object.assign(stored, structuredClone(values))
     }},
     tabs: {
-      get: async id => ({id, url}),
+      get: async id => { if (options.closedDashboard) throw new Error("Tab closed"); return {id, url}; },
       create: async options => { created.push(options); return {id: 7, url}; },
       update: async (id, options) => { updated.push({id, ...options}); }
     },
@@ -115,12 +128,14 @@ test("background remains compatible with market-only snapshots", async () => {
 test("republished snapshots preserve independent holder and market extraction timestamps", async () => {
   const instance = worker(), observedAt = instance.now();
   const snapshot = {url: "https://axiom.trade/meme/token-a", capturedAt: observedAt, marketObservedAt: observedAt, stats: {top10Holders: "14.05%"},
+    tokenInfo: {observedAt, developer: {address: "public-developer", observedAt}, funding: {relativeAgeText: "9mo", transactionTimestamp: null}},
     holdersIntelligence: {extractedAt: observedAt, extractionId: "original", rows: [{observedAt}]}};
   instance.send({type: "AXIOM_STATS_UPDATE", snapshot}, {tab: {id: 42}, url: snapshot.url}); await flush();
   instance.advance(20000);
   instance.send({type: "AXIOM_STATS_UPDATE", snapshot: {...snapshot, capturedAt: instance.now()}}, {tab: {id: 42}, url: snapshot.url}); await flush();
   assert.equal(instance.stored.latestSnapshot.capturedAt, instance.now());
   assert.equal(instance.stored.latestSnapshot.marketObservedAt, observedAt);
+  assert.deepEqual(instance.stored.latestSnapshot.tokenInfo, snapshot.tokenInfo);
   assert.equal(instance.stored.latestSnapshot.holdersIntelligence.extractedAt, observedAt);
   assert.equal(instance.stored.latestSnapshot.holdersIntelligence.rows[0].observedAt, observedAt);
 });
@@ -145,7 +160,7 @@ test("rolling chart delivery is live but persistence is batched every 15 seconds
   assert.equal(instance.localWrites.length, 0);
   assert.equal(instance.archiveWrites.length, 1);
   assert.equal(instance.localSaved.archiveRows.length, 15);
-  assert.deepEqual(instance.imports, ["rollingChartCollector.js", "sampleArchive.js", "liquidityHistory.js"], "Only local recording modules are loaded");
+  assert.deepEqual(instance.imports, ["rollingChartCollector.js", "sampleArchive.js", "liquidityHistory.js", "liquidityAlerts.js", "holderTableExtractor.js", "tradingParticipation.js", "tradingArchive.js"], "Only local recording modules are loaded");
   assert.equal(instance.stored.chartState, undefined, "No per-second chart session-storage writes");
 });
 
@@ -234,4 +249,126 @@ test("a liquidity disk failure leaves price persistence working and reports the 
   assert.equal(instance.broadcasts.findLast(message => message.type === "AXIOM_DOM_ARCHIVE_STATUS").error, null);
   const liquidity = instance.broadcasts.findLast(message => message.type === "AXIOM_LIQUIDITY_ARCHIVE_STATUS");
   assert.match(liquidity.error, /fixture failure/); assert.equal(liquidity.pendingCount, 1);
+});
+
+function tradePacket(instance, keys = ["signature-1-2-0", "signature-1-3-0"], rawAge = "6s") {
+  const T = require("../tradingParticipation.js"), address = n => "0x" + n.toString(16).padStart(40, "0");
+  const context = T.sourceContext({sourceKey: "worker-trades", routeKey: chartSender.url, blockchain: "eth", mintAddress: address(100), poolAddress: address(200)}, "worker", 1);
+  const at = instance.now();
+  return {context, coverage: {tokenKey: context.tokenKey, recordingStartedAt: at, lastReadAt: at, status: "available", filters: {status: "unknown", controls: []}},
+    events: keys.map(key => T.makeEvent({eventKey: key, makerAddress: address(1), makerCandidates: [address(1)], identityStatus: "resolved",
+      traderDisplay: "User label", direction: "buy", directionMarkers: ["text-increase"], rawAge,
+      total: {value: 10, unit: "USD", displayText: "$10", status: "valid"}, tokenAmount: {value: null, status: "missing"}, filters: {status: "unknown", controls: []}}, context, at, "initial-sync"))};
+}
+test("Trade worker validates senders, deduplicates independently, and persists while no dashboard exists", async () => {
+  const instance = worker(), packet = tradePacket(instance);
+  const message = {type: "AXIOM_TRADES_UPDATE", packet};
+  instance.send(message, {url: chartSender.url}); instance.send(message, {tab: {id: 1}, url: "https://evil.test/"});
+  await flush(); assert(!instance.broadcasts.some(message => message.type === "AXIOM_TRADES_LIVE"));
+  instance.send(message, chartSender); await flush();
+  assert.equal(instance.created.length, 0, "Trade collection does not require or open a dashboard");
+  assert.equal(instance.localSaved.tradeRows.length, 0, "Persistence is batched");
+  instance.advance(2000); instance.send({type: "AXIOM_TRADES_UPDATE", packet: tradePacket(instance, undefined, "8s")}, chartSender); await flush();
+  let response;
+  assert.equal(instance.send({type: "AXIOM_TRADES_GET", tokenKey: packet.context.tokenKey}, {url: "https://axiom.trade/"}, value => response = value), undefined);
+  await flush(); assert.equal(response, undefined, "Only dashboard can retrieve archive data");
+  instance.send({type: "AXIOM_TRADES_GET", tokenKey: packet.context.tokenKey}, {url: "chrome-extension://fixture/dashboard.html"}, value => response = value); await flush();
+  assert.equal(response.events.length, 2); assert.equal(response.events[0].estimatedTradeAt, packet.events[0].estimatedTradeAt);
+  instance.advance(15000); await flush(); assert.equal(instance.localSaved.tradeRows.length, 2);
+  assert.equal(instance.localSaved.tradeRows[0].firstSeenAt, packet.events[0].firstSeenAt);
+  const restarted = worker({}, instance.localSaved);
+  restarted.send({type: "AXIOM_TRADES_GET", tokenKey: packet.context.tokenKey}, {url: "chrome-extension://fixture/dashboard.html"}, value => response = value); await flush();
+  assert.equal(response.events.length, 2); assert.equal(response.events[0].estimatedTradeAt, packet.events[0].estimatedTradeAt);
+});
+test("Trading disk errors preserve bounded live events and do not affect price persistence", async () => {
+  const instance = worker({}, {}, {failTrading: true}), packet = tradePacket(instance);
+  instance.send({type: "AXIOM_TRADES_UPDATE", packet}, chartSender);
+  instance.send({type: "AXIOM_DOM_CHART_UPDATE", packet: packetAt(instance.now())}, chartSender); await flush();
+  instance.send({type: "AXIOM_TRADES_FLUSH"}, chartSender); instance.send({type: "AXIOM_DOM_CHART_FLUSH"}, chartSender); await flush();
+  assert.equal(instance.localSaved.archiveRows.length, 1); assert.equal(instance.localSaved.tradeRows.length, 0);
+  const status = instance.broadcasts.findLast(message => message.type === "AXIOM_TRADES_LIVE" && message.archiveStatus.error);
+  assert.match(status.archiveStatus.error, /Trading disk fixture failure/); assert.equal(status.archiveStatus.pending, 2);
+  let response; instance.send({type: "AXIOM_TRADES_GET", tokenKey: packet.context.tokenKey}, {url: "chrome-extension://fixture/dashboard.html"}, value => response = value); await flush();
+  assert.equal(response.events.length, 2); assert.match(response.archiveStatus.error, /fixture failure/);
+});
+test("Closing the dashboard keeps it closed while collection persists; the toolbar can reopen it", async () => {
+  const instance = worker({dashboardAutoOpened: true, dashboardTabId: 7}, {}, {closedDashboard: true});
+  instance.send({type: "AXIOM_STATS_UPDATE", snapshot: {url: chartSender.url, stats: {}}}, chartSender);
+  instance.send({type: "AXIOM_TRADES_UPDATE", packet: tradePacket(instance)}, chartSender); await flush();
+  instance.advance(15000); await flush();
+  assert.equal(instance.created.length, 0); assert.equal(instance.localSaved.tradeRows.length, 2);
+  instance.click(); await flush(); assert.equal(instance.created.length, 1); assert.equal(instance.created[0].active, true);
+});
+test("Trading pending-write cap is bounded and reports selected-source data-loss intervals", async () => {
+  const instance = worker();
+  for (let offset = 0; offset < 5001; offset += 500) {
+    const keys = Array.from({length: Math.min(500, 5001 - offset)}, (_, index) => "bounded-event-" + (offset + index));
+    instance.send({type: "AXIOM_TRADES_UPDATE", packet: tradePacket(instance, keys)}, chartSender); await flush();
+  }
+  const live = instance.broadcasts.findLast(message => message.type === "AXIOM_TRADES_LIVE");
+  assert.equal(live.archiveStatus.pending, 5000); assert(live.losses.some(loss => loss.reason === "pending-write-cap" && loss.count === 1));
+  instance.send({type: "AXIOM_TRADES_FLUSH"}, chartSender); await flush();
+  assert.equal(instance.localSaved.tradeRows.length, 5000);
+});
+
+test("Liquidity alerts run with the dashboard closed, deduplicate worker messages and survive worker reload", async () => {
+  const instance = worker(), sender = chartSender, dashboard = {url: "chrome-extension://fixture/dashboard.html"};
+  let latest;
+  for (let i = 0; i <= 14; i++) {
+    latest = liquidityRow(instance.now(), undefined, i < 12 ? "$100" : "$80");
+    instance.send({type: "AXIOM_LIQUIDITY_UPDATE", row: latest}, sender); await flush();
+    if (i < 14) instance.advance(5000);
+  }
+  assert.equal(instance.created.length, 0);
+  const broadcast = instance.broadcasts.findLast(message => message.type === "AXIOM_LIQUIDITY_LIVE");
+  assert.equal(broadcast.activity.history.length, 1); assert.equal(broadcast.activity.states[0].status, "Liquidity drop detected");
+  instance.send({type: "AXIOM_LIQUIDITY_UPDATE", row: latest}, sender); await flush();
+  assert.equal(instance.broadcasts.findLast(message => message.type === "AXIOM_LIQUIDITY_LIVE").activity.history.length, 1);
+  instance.send({type: "AXIOM_DOM_CHART_FLUSH"}, sender); await flush();
+  assert.equal(instance.localSaved.liquidityMeta["activity-v1"].history.length, 1);
+  const restarted = worker(instance.stored, instance.localSaved); let reply;
+  restarted.send({type: "AXIOM_LIQUIDITY_GET", tokenKey: latest.tokenKey}, dashboard, value => { reply = value; }); await flush();
+  assert.equal(reply.live.length, 0); assert.equal(reply.activity.history.length, 1); assert.equal(reply.activity.states[0].live, false);
+  assert.equal(reply.activity.states[0].status, "Data delayed/unavailable");
+});
+
+test("Liquidity rule settings are dashboard-only, validate fields, preserve archive configuration and surface alert storage failures", async () => {
+  const instance = worker(), dashboard = {url: "chrome-extension://fixture/dashboard.html"}; let reply;
+  instance.localSaved.liquidityMeta.settings = {retentionHours: 24, maxRecords: 10000};
+  instance.send({type: "AXIOM_LIQUIDITY_ALERT_SETTINGS", settings: {dropPercent: 25}}, chartSender, value => { reply = value; }); await flush();
+  assert.equal(reply, undefined);
+  instance.send({type: "AXIOM_LIQUIDITY_ALERT_SETTINGS", settings: {dropPercent: 0}}, dashboard, value => { reply = value; }); await flush();
+  assert.equal(reply.ok, false);
+  instance.send({type: "AXIOM_LIQUIDITY_ALERT_SETTINGS", settings: {dropPercent: 25}}, dashboard, value => { reply = value; }); await flush();
+  assert.equal(reply.ok, true); assert.equal(reply.activity.settings.confirmations, 3); assert.equal(reply.activity.settings.dropPercent, 25);
+  assert.equal(instance.localSaved.liquidityMeta.settings.maxRecords, 10000);
+  const restarted = worker({}, instance.localSaved);
+  restarted.send({type: "AXIOM_LIQUIDITY_GET", tokenKey: "any"}, dashboard, value => { reply = value; }); await flush();
+  assert.equal(reply.activity.settings.dropPercent, 25);
+  const failed = worker({}, {}, {failAlerts: true});
+  failed.send({type: "AXIOM_LIQUIDITY_ALERT_SETTINGS", settings: {dropPercent: 30}}, dashboard, value => { reply = value; }); await flush();
+  assert.equal(reply.ok, true); assert.match(reply.activity.error, /metadata fixture failure/);
+  failed.send({type: "AXIOM_DOM_CHART_UPDATE", packet: packetAt(failed.now())}, chartSender);
+  failed.send({type: "AXIOM_LIQUIDITY_UPDATE", row: liquidityRow(failed.now())}, chartSender); await flush();
+  failed.send({type: "AXIOM_DOM_CHART_FLUSH"}, chartSender); await flush();
+  assert.equal(failed.localSaved.archiveRows.length, 1); assert.equal(failed.localSaved.liquidityRows.length, 1);
+});
+
+test("An alert metadata read failure cannot overwrite saved rules and does not stop liquidity recording", async () => {
+  const saved = {liquidityMeta: {"activity-v1": {version: 1, settings: {...require("../liquidityAlerts.js").DEFAULTS, dropPercent: 35}, history: [], checkpoints: []}}};
+  const instance = worker({}, saved, {failAlertReads: true}), row = liquidityRow(instance.now()); let reply;
+  instance.send({type: "AXIOM_LIQUIDITY_UPDATE", row}, chartSender); await flush();
+  instance.send({type: "AXIOM_DOM_CHART_FLUSH"}, chartSender); await flush();
+  assert.equal(instance.localSaved.liquidityRows.length, 1); assert.equal(instance.localSaved.liquidityMeta["activity-v1"].settings.dropPercent, 35);
+  instance.send({type: "AXIOM_LIQUIDITY_GET", tokenKey: row.tokenKey}, {url: "chrome-extension://fixture/dashboard.html"}, value => { reply = value; }); await flush();
+  assert.equal(reply.activity.ruleLoaded, false); assert.match(reply.activity.error, /read fixture failure/);
+  instance.send({type: "AXIOM_LIQUIDITY_ALERT_SETTINGS", settings: {dropPercent: 25}}, {url: "chrome-extension://fixture/dashboard.html"}, value => { reply = value; }); await flush();
+  assert.equal(reply.ok, false); assert.equal(instance.localSaved.liquidityMeta["activity-v1"].settings.dropPercent, 35);
+});
+
+test("A stored observation cannot advance alert confirmation even if its checkpoint write was lost", async () => {
+  const row = {...liquidityRow(1700000000000), sourceTabId: chartSender.tab.id}, instance = worker({}, {liquidityRows: [row]});
+  instance.send({type: "AXIOM_LIQUIDITY_UPDATE", row}, chartSender); await flush();
+  const message = instance.broadcasts.findLast(message => message.type === "AXIOM_LIQUIDITY_LIVE");
+  assert.equal(message.activity.states.length, 0); assert.equal(message.activity.history.length, 0);
 });

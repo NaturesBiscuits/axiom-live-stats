@@ -7,10 +7,16 @@
   <link rel="stylesheet" href="dashboard.css" />
   <script src="rollingChartCollector.js" defer></script>
   <script src="holderTableExtractor.js" defer></script>
+  <script src="tokenInfoExtractor.js" defer></script>
+  <script src="tokenInfoDashboard.js" defer></script>
+  <script src="tradingParticipation.js" defer></script>
+  <script src="tradingDashboard.js" defer></script>
   <script src="holderConcentration.js" defer></script>
   <script src="vendor/lightweight-charts.standalone.production.js" defer></script>
   <script src="chartView.js" defer></script>
   <script src="liquidityHistory.js" defer></script>
+  <script src="liquidityAlerts.js" defer></script>
+  <script src="liquidityAlertDashboard.js" defer></script>
   <script src="liquidityDashboard.js" defer></script>
   <script src="chartDataCollector.js" defer></script>
   <script src="historicalChart.js" defer></script>
@@ -37,12 +43,48 @@
       <article class="card"><div class="label">Buys · Count / Value</div><div class="value buy" id="buys">—</div></article>
       <article class="card"><div class="label">Sells · Count / Value</div><div class="value sell" id="sells">—</div></article>
       <article class="card"><div class="label">Net Volume</div><div class="value" id="netVolume">—</div></article>
-      <article class="card"><div class="label">Holders</div><div class="value" id="holders">—</div></article>
-      <article class="card"><div class="label">Bundlers (Axiom)</div><div class="value" id="bundlers">—</div></article>
-      <article class="card"><div class="label">Top 10 Holders — Axiom-reported</div><div class="value" id="top10Holders">—</div><p class="card-note" id="top10HoldersObservedAt">Observation time unavailable</p></article>
+      <article class="card"><div class="label">Holders tab count — Axiom-reported</div><div class="value" id="holders">—</div></article>
+    </section>
+    <section class="token-info-exposure" aria-labelledby="tokenInfoHeading">
+      <div class="section-heading"><h2 id="tokenInfoHeading">Token Info &amp; Developer Exposure</h2><span class="source-tag">Axiom-reported DOM</span></div>
+      <p id="tokenInfoObservation" class="section-note">Observation time unavailable</p>
+      <div class="holder-summary" id="tokenInfoTiles">
+        <article class="card"><div class="label">Top 10 Holders — Axiom-reported</div><div class="value" id="top10Holders">Unavailable</div><p class="card-note" id="top10HoldersObservedAt">Observation time unavailable</p></article>
+        <article class="card"><div class="label">Bundlers — Axiom-reported</div><div class="value" id="bundlers">Unavailable</div></article>
+      </div>
+      <p id="tokenInfoHolderCounts" class="section-note"></p>
+      <div class="developer-context" id="tokenInfoIdentity"></div>
+      <p id="developerHolderMatch" class="section-note">Developer holder match unavailable</p>
+      <p class="section-note">Displayed tax has no established buy/sell split. LP burned is Axiom's LP metric; it does not describe token supply burned or guarantee safety. Dex Paid is a displayed payment status, with no fee or security assessment inferred. Funding age is relative text about funding, separate from token age.</p>
+      <p class="section-note">Verified transfers: unavailable · Decoded sales: unavailable · Wallet clustering: unavailable. A holding decrease is an observed change; transaction evidence is needed to establish a sale.</p>
+    </section>
+    <section class="trading-participation chart-collector" aria-labelledby="participationHeading">
+      <div class="section-heading"><h2 id="participationHeading">Trading Participation — Axiom DOM observations</h2><span class="source-tag">Partial observed feed</span></div>
+      <div class="chart-controls">
+        <label>Window <select id="participationRange"><option value="60">1m</option><option value="300">5m</option><option value="900">15m</option></select></label>
+        <label>Timing <select id="participationTiming"><option value="auto">Automatic timing basis</option><option value="approximate-trade-time">Approximate trade time</option><option value="observation-time">First seen time</option></select></label>
+        <label>Volume currency <select id="participationCurrency"></select></label><button type="button" id="participationRefresh">Reload local trades</button>
+      </div>
+      <p id="participationStatus" class="section-note">Waiting for source</p><p id="participationIdentity" class="section-note"></p>
+      <div class="participation-summary">
+        <article class="card"><div class="label">Observed event counts</div><div class="value" id="participationEvents">Unavailable</div></article>
+        <article class="card"><div class="label">Distinct resolved addresses</div><div class="value" id="participationWallets">Unavailable</div><p class="card-note" id="participationBoth"></p></article>
+        <article class="card"><div class="label">Repeat activity</div><div class="value" id="participationRepeat">Unavailable</div></article>
+        <article class="card"><div class="label">Observed Total volume</div><div class="value" id="participationVolume">Unavailable</div></article>
+      </div>
+      <p id="participationUnresolved" class="section-note"></p><p id="participationUnknownVolume" class="section-note"></p>
+      <div id="participationShares" class="liquidity-windows"></div><p id="participationDenominator" class="section-note"></p>
+      <p id="participationTimingNote" class="section-note"></p><p id="participationCoverage" class="section-note"></p><p id="participationFilters" class="section-note"></p>
+      <p id="participationLoss" class="section-note"></p>
+      <details class="chart-diagnostics"><summary>Observed wallet activity and retention</summary>
+        <p id="participationTableNote" class="section-note"></p>
+        <div class="holder-table-scroll" tabindex="0" role="region" aria-label="Observed trading activity by resolved wallet">
+          <table class="holder-table participation-table"><thead><tr><th>Full address</th><th>Display label</th><th>Buy / sell / unknown</th><th>Events per address</th><th>Observed volume</th><th>Share of denominator</th><th>Events missing volume</th></tr></thead><tbody id="participationRows"></tbody></table>
+        </div><p id="participationLimitations" class="section-note"></p>
+      </details>
     </section>
     <section class="chart-collector liquidity-history" aria-labelledby="liquidityHeading">
-      <div class="section-heading"><h2 id="liquidityHeading">Liquidity history</h2><span class="source-tag">Axiom-reported liquidity</span></div>
+      <div class="section-heading"><h2 id="liquidityHeading">Liquidity Activity &amp; Alerts</h2><span class="source-tag">Axiom-reported liquidity</span></div>
       <div class="liquidity-summary">
         <article class="card"><div class="label">Current observed liquidity</div><div class="value" id="liquidityCurrent">Unavailable</div><p class="card-note" id="liquidityObservedAt">No valid observation</p></article>
         <article class="card"><div class="label">First observed liquidity · retained recording</div><div class="value" id="liquidityFirst">Unavailable</div><p class="card-note">Change since first retained observation: <span id="liquiditySinceStart">Unavailable</span></p></article>
@@ -51,10 +93,30 @@
       <div class="chart-controls"><label>View <select id="liquidityRange"><option value="30">30s</option><option value="60">1m</option><option value="300">5m</option><option value="900" selected>15m</option></select></label><label>Currency <select id="liquidityCurrency" aria-label="Liquidity currency"></select></label><button id="liquidityRefresh" type="button">Reload local liquidity</button></div>
       <p class="card-note" id="liquidityChangeLabel">Observed USD liquidity changes</p>
       <div class="liquidity-windows"><span>30s: <strong id="liquidityChange30">Collecting history</strong></span><span>1m: <strong id="liquidityChange60">Collecting history</strong></span><span>5m: <strong id="liquidityChange300">Collecting history</strong></span><span>15m: <strong id="liquidityChange900">Collecting history</strong></span></div>
+      <div class="liquidity-alert-current" role="status" aria-live="polite"><strong id="liquidityAlertStatus">Data delayed/unavailable</strong><p id="liquidityAlertExplanation" class="card-note">Waiting for a fresh sampling attempt.</p></div>
+      <p id="liquidityAlertComparison" class="card-note"></p><p id="liquidityActiveRule" class="card-note"></p><p id="liquidityEpisodeRule" class="card-note"></p>
+      <p class="section-note">Cause unverified. Price changes, swaps, pool changes and migrations can affect observed liquidity. No threshold reached is not a safe-to-buy verdict.</p>
+      <p id="liquidityLPContext" class="card-note">LP Burned context: unavailable.</p>
+      <details class="chart-diagnostics"><summary>Alert settings</summary>
+        <p class="section-note">Starter defaults are engineering heuristics, not validated trading advice. Recovery uses the original trigger baseline. Minimum absolute drop uses each observed currency without conversion.</p>
+        <form id="liquidityAlertForm" class="chart-controls">
+          <label>Comparison window <select id="alert-windowSeconds"><option value="30">30s</option><option value="60" selected>1m</option><option value="300">5m</option><option value="900">15m</option></select></label>
+          <label>Drop threshold (%) <input id="alert-dropPercent" type="number" min="0.000001" max="100" step="any" value="20" required></label>
+          <label>Confirmation observations <input id="alert-confirmations" type="number" min="1" max="20" step="1" value="3" required></label>
+          <label>Recovery threshold (%) <input id="alert-recoveryPercent" type="number" min="0" max="100" step="any" value="15" required></label>
+          <label>Recovery observations <input id="alert-recoveryConfirmations" type="number" min="1" max="20" step="1" value="2" required></label>
+          <label><input id="alert-absoluteEnabled" type="checkbox"> Require minimum absolute drop</label>
+          <label>Minimum drop (observed currency) <input id="alert-minimumAbsoluteDrop" type="number" min="0.000001" step="any" disabled></label>
+          <button id="liquidityAlertSave" type="submit">Save alert rule</button>
+        </form><p id="liquidityAlertSettingsStatus" class="card-note" role="status"></p>
+      </details>
+      <details class="chart-diagnostics"><summary>Alert history (<span id="liquidityAlertHistoryCount">0</span>)</summary><p id="liquidityAlertStorage" class="card-note"></p><div id="liquidityAlertHistory"></div></details>
+      <details class="chart-diagnostics"><summary>Liquidity chart and technical diagnostics</summary>
       <div class="rolling-chart-wrap"><div id="liquidityChart" role="region" aria-label="Axiom-reported liquidity sampled approximately every five seconds; missed readings break lines"></div></div>
       <p class="card-note" id="liquidityCursor">Hover for the exact observed value, currency, original displayed text and timestamp.</p>
       <p class="table-status" id="liquidityStatus" role="status">Waiting for source</p><p class="card-note" id="liquidityIdentity"></p>
       <p class="section-note">Local DOM reads approximately every 5s, including new coins. Charts fit available observations and break across missing readings or delays over 7.5s. Window changes require the full recorded duration and a valid baseline within ±2.5s of the window start; they end at the latest valid observation. Coverage is valid occupied 5s slots / expected slots between the first and last retained attempts in this currency. USD liquidity changes are observed valuations, not confirmed additions/removals or a safe-to-buy guarantee. DOM readability does not verify Axiom's upstream freshness. Separate IndexedDB retention: 24 hours / 10,000 actual attempts globally, saved in 15s batches. After retention removes the beginning, summaries start at the first retained observation.</p>
+      </details>
     </section>
     <section class="holders-intelligence" aria-labelledby="holdersHeading">
       <div class="section-heading">

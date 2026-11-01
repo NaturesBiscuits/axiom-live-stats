@@ -179,8 +179,12 @@ function render(snapshot) {
   if ((snapshot.stats.netVolume || "").startsWith("-")) net.classList.add("negative");
   document.getElementById("updatedAt").textContent = new Date(lastSeenAt).toLocaleTimeString();
   renderHolders(snapshot);
+  AxiomTokenInfoUI.render(snapshot, currentHolderData);
+  AxiomTradingUI.setSnapshot(snapshot);
   AxiomChartUI.setSnapshot(snapshot);
   globalThis.AxiomLiquidityUI?.setContext(snapshot.liquidityContext);
+  const lpBurned = snapshot.tokenInfo?.tiles?.lpBurned;
+  document.getElementById("liquidityLPContext").textContent = `LP Burned — Axiom-reported: ${lpBurned?.status === "available" ? lpBurned.displayText : "Unavailable"}. Separate context; it does not suppress liquidity alerts or establish safety.`;
   updateStatus();
 }
 
@@ -200,6 +204,7 @@ function updateStatus() {
   }
 }
 
+AxiomTokenInfoUI.render({stats: {}}, null);
 chrome.storage.session.get("latestSnapshot").then(({latestSnapshot}) => render(latestSnapshot));
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "session" && changes.latestSnapshot?.newValue) {
@@ -209,3 +214,4 @@ chrome.storage.onChanged.addListener((changes, area) => {
 setInterval(updateStatus, 1000);
 document.getElementById("excludeHolderPools").addEventListener("change", renderConcentration);
 setInterval(renderConcentration, 1000);
+setInterval(() => AxiomTokenInfoUI.refresh(), 1000);
