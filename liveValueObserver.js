@@ -2,6 +2,26 @@
 (() => {
   "use strict";
   const clean = value => (value ?? "").replace(/\s+/g, " ").trim();
+  // Current pair summaries omit the Market Cap label. Match that exact headline slot,
+  // anchored to the token identity and neighboring labeled stats, never an arbitrary amount.
+  function marketCapBinding(spans) {
+    const candidates = [];
+    for (const price of spans.filter(node => node.childElementCount === 0 && clean(node.textContent) === "Price")) {
+      const priceScope = price.parentElement, summary = priceScope?.parentElement, scope = priceScope?.previousElementSibling;
+      if (!summary || !scope || price.closest('[data-perf-id*="table"], [role="row"], [data-perf-id="token-trades-panel"]')) continue;
+      const marker = summary.querySelector('[data-pair-summary-budget-row="true"]');
+      if (!marker || scope.contains(marker)) continue;
+      const leaves = [...summary.querySelectorAll("span")].filter(node => node.childElementCount === 0);
+      if (!["Liquidity", "Supply", "Global Fees Paid"].every(label =>
+        leaves.some(node => clean(node.textContent) === label))) continue;
+      if (leaves.some(node => scope.contains(node) && /^(?:Price|Liquidity|Supply|ATH|Global Fees Paid|Market\s?Cap|Mkt\s?Cap|FDV|Fully Diluted Valuation|B\.Curve)$/.test(clean(node.textContent))) ||
+          scope.querySelector("button, a, input")) continue;
+      const values = [...scope.querySelectorAll("span")].filter(node => node.classList.contains("text-[18px]") &&
+        node.classList.contains("[font-variant-numeric:tabular-nums]"));
+      if (values.length === 1) candidates.push({label: values[0], scope, cells: values, priceLabel: price, summaryMarker: marker});
+    }
+    return candidates.length === 1 ? candidates[0] : null;
+  }
   function createReader(onObservation, now = Date.now, definitions = [["price", ["price"]], ["marketCap", ["market cap", "marketcap", "mkt cap"]]]) {
     let tokenKey = null;
     const bindings = new Map();
@@ -10,7 +30,9 @@
     let switched = false;
     function available(binding) {
       return binding.label.isConnected && binding.scope.getClientRects().length &&
-        binding.allowedLabels.includes(clean(binding.label.textContent).toLowerCase()) &&
+        (binding.priceLabel ? binding.summaryMarker.isConnected && binding.scope.nextElementSibling === binding.priceLabel.parentElement &&
+          clean(binding.priceLabel.textContent) === "Price" : binding.allowedLabels.includes(clean(binding.label.textContent).toLowerCase())) &&
+        (!binding.scope.checkVisibility || binding.scope.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) &&
         !binding.scope.closest('[hidden], [aria-hidden="true"]');
     }
     function text(binding, preferFull = true) {
@@ -25,7 +47,7 @@
         }
         return Array.from(node.childNodes).map(flatten).join("");
       };
-      const cells = Array.from(binding.scope.children).filter(child => child !== binding.label);
+      const cells = binding.cells ?? Array.from(binding.scope.children).filter(child => child !== binding.label);
       const raw = cells.map(flatten).join("").trim();
       // Prefer an explicit full numeric value/tooltip on the value cell when supplied.
       if (preferFull) for (const cell of cells) for (const attribute of [binding.type === "price" ? "data-price" : "data-market-cap", "data-full-value", "title"]) {
@@ -60,11 +82,13 @@
         for (const [type, labels] of definitions) {
           const label = spans.find(node => node.childElementCount === 0 && labels.includes(clean(node.textContent).toLowerCase()) &&
             !node.closest('[data-perf-id*="table"], [role="row"]'));
+          const headline = type === "marketCap" && !label ? marketCapBinding(spans) : null;
+          const selected = headline?.label ?? label;
           const existing = bindings.get(type);
-          if (!label?.parentElement) { bindings.delete(type); onObservation(type, null); continue; }
-          if (existing?.label !== label) {
-            bindings.set(type, {type, label, scope: label.parentElement, lastText: previousText.get(type) ?? null,
-              allowedLabels: labels, initialized: false, waiting: switched && previousText.has(type) && label === previousNodes.get(type)});
+          if (!selected?.parentElement) { bindings.delete(type); onObservation(type, null); continue; }
+          if (existing?.label !== selected || existing?.scope !== (headline?.scope ?? selected.parentElement)) {
+            bindings.set(type, {type, label: selected, scope: selected.parentElement, ...headline, lastText: previousText.get(type) ?? null,
+              allowedLabels: labels, initialized: false, waiting: switched && previousText.has(type) && selected === previousNodes.get(type)});
           }
           read(type, bindings.get(type));
         }
@@ -94,5 +118,5 @@
       }
     };
   }
-  globalThis.AxiomLiveValueObserver = Object.freeze({createReader});
+  globalThis.AxiomLiveValueObserver = Object.freeze({createReader, marketCapBinding});
 })();

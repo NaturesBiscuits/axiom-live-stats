@@ -33,8 +33,12 @@
       const fields = {}, current = new Map();
       for (const [key, definition] of Object.entries(S.definitions)) {
         const labels = nodes.filter(node => !node.children.length && !excluded(node) && definition.labels.includes(clean(node.textContent)));
-        const readable = labels.filter(visible), bindings = readable.map(node => binding(node, nodes));
-        const readings = readable.map((node, index) => ({node, label: clean(node.textContent), raw: bindings[index] ? clean(bindings[index].values.map(text).join("")) || null : null}));
+        const headline = key === "marketCap" && !labels.length ? globalThis.AxiomLiveValueObserver?.marketCapBinding(nodes) : null;
+        if (headline) labels.push(headline.label);
+        const readable = labels.filter(visible), bindings = readable.map(node => node === headline?.label ? {values: headline.cells} : binding(node, nodes));
+        const readings = readable.map((node, index) => ({node,
+          label: node === headline?.label ? "Pair summary headline (unlabeled Market Cap)" : clean(node.textContent),
+          raw: bindings[index] ? clean(bindings[index].values.map(text).join("")) || null : null}));
         const values = readings.map(item => S.observation(key, item.raw, {context, observedAt: at, label: item.label}));
         const signature = JSON.stringify(readings.map(item => [item.label, item.raw]));
         const prior = previous.get(key), guard = blocked.get(key);

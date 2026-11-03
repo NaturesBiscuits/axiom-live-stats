@@ -8,8 +8,56 @@
   const labels = () => [...root.querySelectorAll("span")].filter(node => S.labels.includes(node.textContent.trim()));
   const script = (doc, file) => new Promise((resolve, reject) => { const item = doc.createElement("script"); item.src = new URL(file, location.href).href; item.onload = resolve; item.onerror = reject; doc.head.append(item); });
   window.addEventListener("error", e => errors.push(e.message)); window.addEventListener("unhandledrejection", e => errors.push(String(e.reason)));
-  let normalPacket, ui, doc, win;
+  let normalPacket, ui, doc, win, headerTemplates;
   try {
+    await test("Both captured unlabeled pair-summary headlines provide observed Market Cap with provenance", async () => {
+      headerTemplates = document.createElement("div");
+      headerTemplates.innerHTML = await (await fetch("fixtures/pair-summary-headlines.html")).text();
+      for (const [name, raw, value] of [["stonks", "$981K", "981000"], ["entry", "$17.2K", "17200"]]) {
+        root.innerHTML = headerTemplates.querySelector(`#${name}`).innerHTML;
+        const field = AxiomSupplyExtractor.createReader().read(labels(), context).fields.marketCap;
+        assert(field.rawText === raw && field.normalizedValue === value && field.status === "available", `${name}: headline value, not liquidity, price or ATH`);
+        assert(field.sourceField === "Pair summary headline (unlabeled Market Cap)" && field.observedAt, "Fallback source location and observation time retained");
+      }
+    });
+    await test("Headline chart readings update on mutations and preserve zero, missing states and token guards", async () => {
+      root.innerHTML = headerTemplates.querySelector("#stonks").innerHTML;
+      const observed = [], reader = AxiomLiveValueObserver.createReader((type, parsed) => { if (type === "marketCap") observed.push(parsed); });
+      const spans = () => [...root.querySelectorAll("span")];
+      reader.setToken("headline-a"); reader.bind(spans());
+      assert(observed.at(-1)?.value === 981000, "Chart reads the unlabeled headline");
+      reader.setToken("headline-b"); reader.bind(spans());
+      assert(observed.at(-1) === null, "Reused previous-token headline is blocked");
+      const observer = new MutationObserver(records => reader.mutations(records));
+      observer.observe(root, {childList: true, characterData: true, subtree: true, attributes: true});
+      const headline = root.querySelector('[class~="text-[18px]"]'); headline.textContent = "$0"; await pause(10);
+      assert(observed.at(-1)?.value === 0, "Fresh zero is retained");
+      headline.textContent = "$1.25M"; await pause(10);
+      assert(observed.at(-1)?.value === 1250000, "Headline-only changes reach chart immediately");
+      headline.parentElement.parentElement.hidden = true; await pause(10);
+      assert(observed.at(-1) === null, "Hidden headline cannot supply live readings");
+      observer.disconnect();
+    });
+    await test("Headline fallback requires a unique pair-summary slot and preserves labeled Market Cap behavior", () => {
+      const capture = headerTemplates.querySelector("#entry").innerHTML;
+      root.innerHTML = capture + markup([["Market Cap", "$123K"]]);
+      assert(AxiomSupplyExtractor.createReader().read(labels(), context).fields.marketCap.rawText === "$123K", "Explicit labels retain priority");
+      root.innerHTML = capture;
+      const reader = AxiomSupplyExtractor.createReader(); reader.read(labels(), context);
+      const switched = {...context, sourceKey: "headline-other"};
+      assert(reader.read(labels(), switched).fields.marketCap.status === "awaiting-token", "Supply provenance guards reused headline across tokens");
+      root.querySelector('[class~="text-[18px]"]').textContent = "$18K";
+      assert(reader.read(labels(), switched).fields.marketCap.normalizedValue === "18000", "Updated headline becomes available");
+      root.innerHTML = capture; root.querySelector('[data-pair-summary-budget-row]').remove();
+      assert(AxiomSupplyExtractor.createReader().read(labels(), context).fields.marketCap.status === "missing", "Unrelated unlabeled amounts are not accepted");
+      root.innerHTML = capture + capture;
+      assert(AxiomSupplyExtractor.createReader().read(labels(), context).fields.marketCap.status === "missing", "Ambiguous summaries cannot select a token arbitrarily");
+      root.innerHTML = capture;
+      root.querySelector('[class~="text-[18px]"]').parentElement.insertAdjacentHTML("afterbegin", "<span>FDV</span>");
+      assert(AxiomSupplyExtractor.createReader().read(labels(), context).fields.marketCap.status === "missing", "A labeled FDV headline cannot substitute for Market Cap");
+      root.innerHTML = capture; root.querySelector('[class~="text-[18px]"]').textContent = "Loading";
+      assert(AxiomSupplyExtractor.createReader().read(labels(), context).fields.marketCap.status === "malformed", "Malformed headline never borrows another amount");
+    });
     await test("DOM capture preserves raw price/supply/cap with exact normalization and leaves generic supply untyped", () => {
       root.innerHTML = markup([["Price", "$0.1"], ["Supply", "1.001K"], ["Market Cap", "$999K"]]);
       const packet = AxiomSupplyExtractor.createReader().read(labels(), context);
@@ -102,6 +150,19 @@
       assert(chartRows.length && chartRows.every(row => row.value === 999), "Calculated total valuation 300 never overwrites observed cap 999");
       const observedAt = snapshot.supplyValuation.fields.price.observedAt;
       await pause(150); assert(messages.filter(row => row.type === "AXIOM_STATS_UPDATE").at(-1).snapshot.supplyValuation.fields.price.observedAt === observedAt, "Rereading a snapshot is not a fresh extraction");
+      for (const [name, raw, numeric] of [["stonks", "$981K", 981000], ["entry", "$17.2K", 17200]]) {
+        market.innerHTML = headerTemplates.querySelector(`#${name}`).innerHTML;
+        // Label rediscovery is throttled; wait for its next actual chart sample.
+        for (let attempt = 0; attempt < 100; attempt++) {
+          const current = messages.filter(row => row.type === "AXIOM_DOM_CHART_UPDATE").at(-1)?.packet.series.marketCap.samples.at(-1);
+          if (current?.value === numeric) break;
+          await pause(50);
+        }
+        const latest = messages.filter(row => row.type === "AXIOM_STATS_UPDATE").at(-1)?.snapshot;
+        assert(latest?.stats.marketCap === raw && latest.supplyValuation.fields.marketCap.normalizedValue === String(numeric), `${name}: unlabeled cap reaches dashboard/recording snapshots`);
+        const latestChart = messages.filter(row => row.type === "AXIOM_DOM_CHART_UPDATE").at(-1)?.packet.series.marketCap.samples.at(-1);
+        assert(latestChart?.value === numeric, `${name}: chart uses the same observed cap: ${JSON.stringify(latestChart)}`);
+      }
       window.dispatchEvent(new Event("pagehide"));
     });
     assert(!errors.length, errors.join("; "));
