@@ -51,9 +51,9 @@
       <p id="recordingStatus" class="section-note" role="status" aria-live="polite">Waiting for Axiom observations.</p>
       <p id="recordingTimes" class="card-note"></p>
       <p class="card-note">Records one token and source tab with UTC observation times. Stops on token/network changes, after 1 hour, or at the recording size limit. Starting a new recording replaces the previous local report; copy it first. No data is sent to an AI service.</p>
-      <details id="recordingOutputDetails" class="chart-diagnostics" hidden><summary id="recordingOutputSummary">Copyable LLM report</summary>
+      <details id="recordingOutputDetails" class="chart-diagnostics" hidden><summary id="recordingOutputSummary">Compact LLM report</summary>
         <div class="chart-controls"><button id="recordingOutputCopy" type="button" disabled>Copy report to clipboard</button></div>
-        <label for="recordingOutput" class="section-note">Paste this report into your LLM. It includes source definitions, missing data and coverage limitations.</label>
+        <label for="recordingOutput" class="section-note">Paste this compact report into your LLM. Shared details appear once; timelines preserve every recorded sample, source timestamp and coverage limitation.</label>
         <textarea id="recordingOutput" readonly spellcheck="false" aria-label="Recorded analyzer report"></textarea>
       </details>
     </section>

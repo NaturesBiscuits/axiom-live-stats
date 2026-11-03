@@ -173,7 +173,7 @@ test("Worker records bounded analyzer summaries with dashboard closed and ignore
   instance.send({type: "AXIOM_STATS_UPDATE", snapshot: recordingSnapshot(instance.now(), "other")}, {...chartSender, tab: {id: 99}}); await flush();
   instance.send({type: "AXIOM_STATS_UPDATE", snapshot: recordingSnapshot(instance.now())}, chartSender); await flush();
   const stopped = await recordingRequest(instance, "AXIOM_RECORDING_STOP");
-  assert.equal(stopped.ok, true); assert.equal(stopped.session.count, 2); assert.match(stopped.text, /ENTRIES — one JSON object per line/);
+  assert.equal(stopped.ok, true); assert.equal(stopped.session.count, 2); assert.match(stopped.text, /FIELD TIMELINES — one JSON object per line/);
   assert.equal(instance.created.length, 0); assert.equal(instance.localSaved.recording.rows[1].trading.status, "unavailable");
   assert.equal(instance.localSaved.recording.rows[1].holders.tableStatus, "unavailable"); assert.equal(instance.stored.latestSnapshot.stats.marketCap, "$999");
   assert.equal(instance.archiveWrites.length, 0); assert.equal(instance.warnings.length, 0);

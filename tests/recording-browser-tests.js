@@ -62,10 +62,10 @@
       const stopped = ui.inspect().session, durationMs = stopped.endedAt - stopped.startedAt;
       assert(node("recordingEndPrice").textContent === "$3", "Ending price appears in the recording panel after Stop");
       assert(node("recordingDuration").textContent.startsWith("Recorded duration: ") && text.includes(node("recordingDuration").textContent), "Final duration shown and included in copied report");
-      assert(text.includes(`Started (UTC): ${new Date(stopped.startedAt).toISOString()}`) && text.includes(`Ended (UTC): ${new Date(stopped.endedAt).toISOString()}`) && text.includes(`\"durationMs\": ${durationMs}`), "Start/end timestamps and exact duration retained");
+      assert(text.includes(`Started (UTC): ${new Date(stopped.startedAt).toISOString()}`) && text.includes(`Ended (UTC): ${new Date(stopped.endedAt).toISOString()}`) && text.includes(`\"durationMs\":${durationMs}`), "Start/end timestamps and exact duration retained");
       assert(node("recordingOutput").readOnly && !node("recordingCopy").disabled && !node("recordingOutputCopy").disabled && node("recordingOutputDetails").open, "Report view and both Copy buttons ready");
       assert(text.includes('"marketCap":"$999"') && text.includes('"normalizedValue":"300"') && text.includes("9007199254740993"), "Raw cap and exact calculation remain separate");
-      assert(text.includes("observedAtUTC") && text.includes("loggedAtUTC") && text.includes("null means unavailable"), "Timestamped output explains missing data");
+      assert(text.includes("SAMPLE CLOCK") && text.includes("loggedMs") && text.includes("observedMs") && text.includes("null means unavailable"), "Timestamped output explains missing data");
       assert(text.includes("untrusted source data") && !node("recordingOutputDetails").querySelector("img"), "Source markup cannot execute");
       assert(node("recordingStart").textContent === "Start new recording", "Previous report replacement is explicit");
       const finalDuration = node("recordingDuration").textContent;
