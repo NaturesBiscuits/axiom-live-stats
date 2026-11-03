@@ -12,13 +12,43 @@ importScripts("supplyValuation.js");
 importScripts("holderConcentration.js");
 importScripts("analysisRecorder.js");
 importScripts("analysisRecordingArchive.js");
+importScripts("liveSignals.js");
+importScripts("liveSignalArchive.js");
+importScripts("liveSignalService.js");
+const signalSnapshots = new Map(), signalKeys = new Map();
+const liveSignals = AxiomLiveSignalService.createService({archive: AxiomLiveSignalArchive.createArchive(),
+  onUpdate: signalBroadcast,
+  hasPermission: () => chrome.permissions?.contains({permissions: ["notifications"]}) ?? Promise.resolve(false),
+  notify: event => chrome.notifications.create(`axiom-signal-${event.triggeredAt}`, {type: "basic", iconUrl: chrome.runtime.getURL("signal-icon.svg"),
+    title: event.type === "buy-trigger" ? "Entry conditions met" : event.type.startsWith("risk-warning:") ? "Observed risk warning" : "Tracked position exit conditions met",
+    message: `${String(event.title ?? event.context.mintAddress ?? "Axiom token").slice(0, 60)} · tab ${event.sourceTabId} · ${event.currency} ${event.price}. Informational ${event.type}; no order executed. Open Live Signals for evidence.`})});
+function signalBroadcast(result) {
+  if (!result) return;
+  try { chrome.runtime.sendMessage({type: "AXIOM_SIGNALS_STATE", ...result}, () => { void chrome.runtime.lastError; }); } catch { /* Dashboard may be closed. */ }
+}
+async function receiveSignalPrices(packet, tab, deliveredAt) {
+  await Promise.all([tradingQueue, liquidityLoaded]);
+  const snapshot = signalSnapshots.get(tab);
+  if (!snapshot || AxiomAnalysisRecorder.scopeKey(snapshot.chartContext) !== AxiomAnalysisRecorder.scopeKey(packet.context) || packet.tokenKey !== packet.context?.sourceKey) return;
+  const unit = packet.series?.price?.unit;
+  for (const row of (packet.series?.price?.samples ?? []).slice(-900)) {
+    const at = Date.now();
+    if (row.stale || row.restored || row.gap || row.sampledAt > at + 1000 || row.sampledAt < at - 15000 || row.domReadAt > row.sampledAt + 1000) continue;
+    if (signalSnapshots.get(tab)?.chartContext?.sourceKey !== packet.context.sourceKey) return;
+    const input = AxiomLiveSignals.buildSnapshot({snapshot, extras: recordingExtras(snapshot, at, tab, {allActiveAlerts: true}),
+      row: {...row, unit, deliveredAt}, sourceTabId: tab, at});
+    if (!input) continue;
+    signalKeys.set(tab, {key: input.key, sourceKey: snapshot.chartContext.sourceKey, scope: AxiomAnalysisRecorder.scopeKey(snapshot.chartContext)});
+    await liveSignals.observe(input);
+  }
+}
 const analysisRecording = AxiomAnalysisRecorder.createService({archive: AxiomAnalysisRecordingArchive.createArchive()});
 function recordingBroadcast(result) {
   if (!result) return;
   try { chrome.runtime.sendMessage({type: "AXIOM_RECORDING_STATE", session: result.session}, () => { void chrome.runtime.lastError; }); }
   catch { /* Manual recording continues with the dashboard closed. */ }
 }
-function recordingExtras(snapshot, at, sourceTabId) {
+function recordingExtras(snapshot, at, sourceTabId, {allActiveAlerts = false} = {}) {
   const context = snapshot.chartContext, holders = snapshot.holdersIntelligence;
   const matches = candidate => candidate && AxiomAnalysisRecorder.scopeKey(candidate) === AxiomAnalysisRecorder.scopeKey(context);
   const matched = matches(holders?.context) && holders?.tokenKey === snapshot.tokenKey;
@@ -39,6 +69,7 @@ function recordingExtras(snapshot, at, sourceTabId) {
   const activity = alertSnapshot(liquidityKey);
   const fromThisTab = key => { try { return JSON.parse(key).at(-1) === sourceTabId; } catch { return false; } };
   const activityHistory = activity.history.filter(event => fromThisTab(event.scopeKey) && event.triggeredAt <= at);
+  const includedHistory = allActiveAlerts ? activityHistory.filter((event, index) => index >= activityHistory.length - 5 || event.recoveredAt === null) : activityHistory.slice(-5);
   return {
     holders: {source: "Axiom DOM; partial rendered table", extractedAt: holders?.extractedAt ?? null,
       tableStatus: matched ? holders.tableStatus : "unavailable", renderedHolders: matched ? holders.renderedHolders : null,
@@ -47,7 +78,7 @@ function recordingExtras(snapshot, at, sourceTabId) {
     trading: {source: "Partial Axiom observed feed", status: coverage ? "observed-partial" : "unavailable", observedAt: coverage?.lastReadAt ?? null, filters: coverage?.filters ?? null,
       archiveError: tradingError, windows: trading},
     liquidity: {source: "Axiom-reported liquidity observations", status: liquidity.length ? "observed" : "unavailable", series: liquidity, storageError: liquidityError,
-      activity: {settings: activity.settings, states: activity.states.filter(state => fromThisTab(state.key) && state.lastSampledAt <= at), history: activityHistory.slice(-5),
+      activity: {settings: activity.settings, ruleLoaded: activity.ruleLoaded, states: activity.states.filter(state => fromThisTab(state.key) && state.lastSampledAt <= at), history: includedHistory,
         retainedAlerts: activityHistory.length, includedLatestAlerts: Math.min(5, activityHistory.length), error: activity.error}}
   };
 }
@@ -264,6 +295,7 @@ function receiveSamples(packet, sender) {
         deliveredAt: Number.isFinite(row.sampledAt) ? receivedAt : null,
         deliveryDelayMs: Number.isFinite(row.sampledAt) ? Math.max(0, receivedAt - row.sampledAt) : null}))}]))};
     if (!rollingCharts.merge(delivered)) return;
+    void receiveSignalPrices(delivered, sender.tab.id, receivedAt).catch(error => console.warn("Live signals:", error));
     for (const [type, series] of Object.entries(delivered.series)) for (const row of series.samples) {
       if (row.gap || !Number.isFinite(row.sampledAt)) continue;
       const normalized = {...row, tokenKey: delivered.tokenKey, tokenIdentity: {
@@ -308,6 +340,21 @@ async function ensureDashboard(activate = false) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (["AXIOM_SIGNALS_STATUS", "AXIOM_SIGNALS_SETTINGS", "AXIOM_SIGNALS_POSITION", "AXIOM_SIGNALS_CLOSE", "AXIOM_SIGNALS_NOTIFICATIONS", "AXIOM_SIGNALS_EXPORT"].includes(message?.type)) {
+    if (sender.url !== chrome.runtime.getURL("dashboard.html")) return;
+    void (async () => {
+      const selected = signalKeys.get(message.sourceTabId);
+      const key = selected && selected.sourceKey === message.sourceKey && selected.scope === AxiomAnalysisRecorder.scopeKey(signalSnapshots.get(message.sourceTabId)?.chartContext) ? selected.key : "@waiting";
+      if (["AXIOM_SIGNALS_POSITION", "AXIOM_SIGNALS_CLOSE"].includes(message.type) && (key === "@waiting" || message.key !== key)) throw new Error("Selected token/source changed; refresh Live Signals before changing a position.");
+      if (message.type === "AXIOM_SIGNALS_SETTINGS") await liveSignals.settings(message.settings);
+      if (message.type === "AXIOM_SIGNALS_POSITION") await liveSignals.position(key, message.position);
+      if (message.type === "AXIOM_SIGNALS_CLOSE") await liveSignals.closePosition(key);
+      if (message.type === "AXIOM_SIGNALS_NOTIFICATIONS") await liveSignals.notifications(message.enabled);
+      const result = message.type === "AXIOM_SIGNALS_EXPORT" ? await liveSignals.export() : await liveSignals.status(key);
+      sendResponse({ok: true, ...result});
+    })().catch(error => sendResponse({ok: false, error: error.message}));
+    return true;
+  }
   if (["AXIOM_RECORDING_STATUS", "AXIOM_RECORDING_START", "AXIOM_RECORDING_STOP", "AXIOM_RECORDING_REPORT"].includes(message?.type)) {
     if (sender.url !== chrome.runtime.getURL("dashboard.html")) return;
     void (async () => {
@@ -405,6 +452,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type !== "AXIOM_STATS_UPDATE" || !message.snapshot) return;
   if (typeof sender.tab?.id !== "number" ||
       !sender.url?.startsWith("https://axiom.trade/")) return;
+  const priorSignalSnapshot = signalSnapshots.get(sender.tab.id);
+  if (!priorSignalSnapshot || (message.snapshot.marketObservedAt ?? 0) >= (priorSignalSnapshot.marketObservedAt ?? 0)) signalSnapshots.set(sender.tab.id, message.snapshot);
+  while (signalSnapshots.size > 16) { const key = signalSnapshots.keys().next().value; signalSnapshots.delete(key); signalKeys.delete(key); }
   void analysisRecording.observe(message.snapshot, sender.tab.id, Date.now(), at => recordingExtras(message.snapshot, at, sender.tab.id))
     .then(recordingBroadcast).catch(error => console.warn("Analysis recording:", error));
   void (async () => {
@@ -424,5 +474,7 @@ chrome.action.onClicked.addListener(() => {
   void ensureDashboard(true).catch(console.warn);
 });
 chrome.tabs.onRemoved?.addListener(tabId => {
+  signalSnapshots.delete(tabId); signalKeys.delete(tabId);
+  void liveSignals.interrupt(tabId).then(signalBroadcast).catch(error => console.warn("Live signals:", error));
   void analysisRecording.sourceClosed(tabId).then(recordingBroadcast).catch(error => console.warn("Analysis recording:", error));
 });

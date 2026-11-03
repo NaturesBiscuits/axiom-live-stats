@@ -14,6 +14,8 @@ A read-only Chrome Manifest V3 extension with Axiom statistics, Bundlers, Holder
 
 ## Collected stats
 
+**Live Signals** adds a deterministic Momentum Breakout monitor with explainable bullish/bearish condition scores, separate risk vetoes, manual/paper position plans, stop/target/trailing alerts, optional Chrome notifications and chronological evaluation exports. It reuses existing DOM collectors, works independently of the manual AI recorder, and preserves interruptions and unknown inputs. Start with paper tracking; defaults are engineering heuristics without measured profitability. See [LIVE_SIGNALS.md](LIVE_SIGNALS.md) for scoring, data requirements, parameters, confirmation, persistence, notification opt-in and manual checks.
+
 Market Cap supports both labeled cells and Axiom's current unlabeled pair-summary headline immediately before Price. The headline is matched using the token-summary marker and neighboring stat labels; its source is retained as `Pair summary headline (unlabeled Market Cap)`. Dashboard snapshots, analysis recordings, Supply & Valuation and local market-cap charts use this displayed observation.
 
 Global Fees Paid, Price, Market Cap, Liquidity, Supply, ATH, 5m Volume, Buys, Sells, Net Volume, Holders, and Axiom's displayed Bundlers and Top 10 Holders percentages. Generic Supply has an unspecified supply type; Market Cap remains Axiom-reported. The compact **Liquidity history** section records Axiom-reported liquidity locally from monitoring start, including coins only seconds old; no API or credits are used.

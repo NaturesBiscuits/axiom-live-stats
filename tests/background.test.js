@@ -44,6 +44,10 @@ function worker(stored = {}, localSaved = {}, options = {}) {
     setTimeout(fn, ms) { const id = ++timerId; timers.set(id, {fn, at: clock + ms}); return id; },
     clearTimeout(id) { timers.delete(id); },
     importScripts(name) { imports.push(name); },
+    AxiomLiveSignals: require("../liveSignals.js"),
+    AxiomLiveSignalService: {...require("../liveSignalService.js"), createService: config => require("../liveSignalService.js").createService({...config, now: () => clock})},
+    AxiomLiveSignalArchive: {createArchive: () => ({load: async () => { if (options.failSignalsRead) throw new Error("Signal read failure"); return structuredClone(localSaved.signals ?? null); },
+      save: async saved => { if (options.failSignalsWrite) throw new Error("Signal write failure"); localSaved.signals = structuredClone(saved); }})},
     AxiomSupply: require("../supplyValuation.js"), AxiomHolderConcentration: require("../holderConcentration.js"),
     AxiomAnalysisRecorder: {...require("../analysisRecorder.js"), createService: config => require("../analysisRecorder.js").createService({...config, now: () => clock})},
     AxiomAnalysisRecordingArchive: {createArchive: () => ({
@@ -222,6 +226,62 @@ function packetAt(at, key = "token-a", value = 1) {
   return model.tick(at);
 }
 
+test("Live Signals uses existing samples with dashboard closed and isolates tabs, contexts and dashboard commands", async () => {
+  const instance = worker(), packet = packetAt(instance.now()), sourceKey = packet.context.sourceKey;
+  const snapshot = {...recordingSnapshot(instance.now()), chartContext: packet.context};
+  instance.send({type: "AXIOM_STATS_UPDATE", snapshot}, chartSender); await flush();
+  instance.send({type: "AXIOM_DOM_CHART_UPDATE", packet}, chartSender); await flush();
+  let result = await recordingRequest(instance, "AXIOM_SIGNALS_STATUS", {sourceKey, sourceTabId: 42});
+  assert.equal(result.ok, true); assert.equal(result.current.observations.price.value, 1);
+  assert.equal(result.current.score.status, "Insufficient data"); assert.equal(result.position, null);
+  const count = instance.localSaved.signals.engine.journal.length;
+  instance.send({type: "AXIOM_DOM_CHART_UPDATE", packet}, chartSender); await flush();
+  instance.send({type: "AXIOM_DOM_CHART_UPDATE", packet: packetAt(instance.now(), sourceKey, 999)}, {...chartSender, tab: {id: 99}}); await flush();
+  assert.equal(instance.localSaved.signals.engine.journal.length, count, "Duplicates and another tab without matching source cannot create evidence");
+  result = await recordingRequest(instance, "AXIOM_SIGNALS_STATUS", {sourceKey, sourceTabId: 99}); assert.equal(result.current, null);
+  let called = false; instance.send({type: "AXIOM_SIGNALS_SETTINGS", settings: {confirmations: 1}}, chartSender, () => { called = true; }); await flush();
+  assert.equal(called, false, "Source pages cannot change signal rules");
+  const changed = {...snapshot, chartContext: {...packet.context, sourceKey: "other-source"}, marketObservedAt: instance.now() + 1};
+  instance.send({type: "AXIOM_STATS_UPDATE", snapshot: changed}, chartSender); await flush();
+  result = await recordingRequest(instance, "AXIOM_SIGNALS_STATUS", {sourceKey, sourceTabId: 42}); assert.equal(result.current, null, "A source switch invalidates the prior UI key immediately");
+});
+
+test("Signal storage failures leave ordinary market delivery working and cannot authorize unread overwrites", async () => {
+  const instance = worker({}, {}, {failSignalsRead: true}), packet = packetAt(instance.now());
+  instance.send({type: "AXIOM_STATS_UPDATE", snapshot: {...recordingSnapshot(instance.now()), chartContext: packet.context}}, chartSender);
+  instance.send({type: "AXIOM_DOM_CHART_UPDATE", packet}, chartSender); await flush();
+  assert.equal(instance.stored.latestSnapshot.stats.marketCap, "$999");
+  const result = await recordingRequest(instance, "AXIOM_SIGNALS_SETTINGS", {settings: {confirmations: 1}});
+  assert.equal(result.ok, false); assert.match(result.error, /read failure/); assert.equal(instance.localSaved.signals, undefined);
+});
+
+test("Real worker adapters combine existing price/liquidity/trading summaries into a confirmed entry without manual recording", async () => {
+  const instance = worker();
+  await recordingRequest(instance, "AXIOM_SIGNALS_SETTINGS", {settings: {confirmations: 1}});
+  let lastLiquidity;
+  for (let second = 0; second <= 60; second++) {
+    if (second) instance.advance(1000);
+    const at = instance.now(), trades = tradePacket(instance, [`signal-${second}`], "0s"), context = trades.context;
+    if (second % 5 === 0) {
+      trades.events[0].appearance = "newly-observed";
+      trades.events[0].makerAddress = "0x" + (second % 4 + 1).toString(16).padStart(40, "0");
+      trades.events[0].makerCandidates = [trades.events[0].makerAddress];
+      instance.send({type: "AXIOM_TRADES_UPDATE", packet: trades}, chartSender);
+      lastLiquidity = liquidityRow(at, context, "$10000");
+      instance.send({type: "AXIOM_LIQUIDITY_UPDATE", row: lastLiquidity}, chartSender); await flush();
+    }
+    const snapshot = {...recordingSnapshot(at), chartContext: context, tradingContext: context, tradingStatus: trades.coverage, liquidityContext: lastLiquidity.tokenIdentity};
+    instance.send({type: "AXIOM_STATS_UPDATE", snapshot}, chartSender); await flush();
+    const model = require("../rollingChartCollector.js").createStore({now: () => at}); model.setToken(context); model.observe("price", {value: second < 60 ? 100 : 101, unit: "USD"}, at);
+    instance.send({type: "AXIOM_DOM_CHART_UPDATE", packet: model.tick(at)}, chartSender); await flush();
+  }
+  const result = await recordingRequest(instance, "AXIOM_SIGNALS_STATUS", {sourceKey: "worker-trades", sourceTabId: 42});
+  assert.equal(result.current.score.status, "available"); assert.equal(result.current.phase, "buy-trigger");
+  assert.equal(result.history.filter(e => e.type === "buy-trigger").length, 1);
+  assert.equal(result.current.observations.trading.summary.events, 12, "Rolling summaries are recomputed from observed events, never summed across snapshots");
+  assert.equal(instance.localSaved.recording, undefined, "Live monitoring does not depend on the manual recorder");
+});
+
 test("rolling chart delivery is live but persistence is batched every 15 seconds", async () => {
   const instance = worker();
   for (let index = 0; index < 16; index++) {
@@ -234,7 +294,7 @@ test("rolling chart delivery is live but persistence is batched every 15 seconds
   assert.equal(instance.localWrites.length, 0);
   assert.equal(instance.archiveWrites.length, 1);
   assert.equal(instance.localSaved.archiveRows.length, 15);
-  assert.deepEqual(instance.imports, ["rollingChartCollector.js", "sampleArchive.js", "liquidityHistory.js", "liquidityAlerts.js", "holderTableExtractor.js", "tradingParticipation.js", "tradingArchive.js", "supplyValuation.js", "holderConcentration.js", "analysisRecorder.js", "analysisRecordingArchive.js"], "Only local recording modules are loaded");
+  assert.deepEqual(instance.imports, ["rollingChartCollector.js", "sampleArchive.js", "liquidityHistory.js", "liquidityAlerts.js", "holderTableExtractor.js", "tradingParticipation.js", "tradingArchive.js", "supplyValuation.js", "holderConcentration.js", "analysisRecorder.js", "analysisRecordingArchive.js", "liveSignals.js", "liveSignalArchive.js", "liveSignalService.js"], "Only local analyzer modules are loaded");
   assert.equal(instance.stored.chartState, undefined, "No per-second chart session-storage writes");
 });
 

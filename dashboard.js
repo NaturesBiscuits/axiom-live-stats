@@ -4,6 +4,7 @@ const fields = [
   "volume5m", "buys", "sells", "netVolume", "holders", "bundlers", "top10Holders"
 ];
 let lastSeenAt = null;
+let selectedSourceTabId = null;
 let lastHolderFingerprint = "";
 let currentHolderData = null;
 const holderTime = at => Number.isFinite(at) ? new Date(at).toISOString() : "Unavailable";
@@ -157,8 +158,9 @@ function renderHolders(snapshot) {
   body.replaceChildren(fragment);
 }
 
-function render(snapshot) {
+function render(snapshot, sourceTabId = selectedSourceTabId) {
   if (!snapshot?.stats) return;
+  selectedSourceTabId = sourceTabId;
   lastSeenAt = snapshot.capturedAt || Date.now();
   document.getElementById("tokenTitle").textContent = snapshot.title || "Axiom token";
   const link = document.getElementById("tokenLink");
@@ -182,6 +184,7 @@ function render(snapshot) {
   AxiomTokenInfoUI.render(snapshot, currentHolderData);
   globalThis.AxiomSupplyUI?.setSnapshot(snapshot);
   globalThis.AxiomRecordingUI?.setSnapshot(snapshot);
+  globalThis.AxiomLiveSignalsUI?.setSnapshot(snapshot, selectedSourceTabId);
   AxiomTradingUI.setSnapshot(snapshot);
   AxiomChartUI.setSnapshot(snapshot);
   globalThis.AxiomLiquidityUI?.setContext(snapshot.liquidityContext);
@@ -207,10 +210,10 @@ function updateStatus() {
 }
 
 AxiomTokenInfoUI.render({stats: {}}, null);
-chrome.storage.session.get("latestSnapshot").then(({latestSnapshot}) => render(latestSnapshot));
+chrome.storage.session.get(["latestSnapshot", "sourceTabId"]).then(({latestSnapshot, sourceTabId}) => render(latestSnapshot, sourceTabId));
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "session" && changes.latestSnapshot?.newValue) {
-    render(changes.latestSnapshot.newValue);
+    render(changes.latestSnapshot.newValue, changes.sourceTabId?.newValue ?? selectedSourceTabId);
   }
 });
 setInterval(updateStatus, 1000);

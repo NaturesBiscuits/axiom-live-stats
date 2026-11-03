@@ -12,6 +12,8 @@
   <script src="supplyValuation.js" defer></script>
   <script src="supplyDashboard.js" defer></script>
   <script src="analysisRecordingDashboard.js" defer></script>
+  <script src="liveSignals.js" defer></script>
+  <script src="liveSignalsDashboard.js" defer></script>
   <script src="tradingParticipation.js" defer></script>
   <script src="tradingDashboard.js" defer></script>
   <script src="holderConcentration.js" defer></script>
@@ -35,6 +37,33 @@
     <section class="token-panel">
       <div><p class="eyebrow">ACTIVE TOKEN</p><h1 id="tokenTitle">Open a token page on Axiom</h1><a id="tokenLink" href="https://axiom.trade/" target="_blank" rel="noopener noreferrer">Open Axiom ↗</a></div>
       <div class="right"><p class="eyebrow">LAST UPDATE</p><p id="updatedAt">—</p></div>
+    </section>
+    <section class="live-signals chart-collector" aria-labelledby="signalsHeading">
+      <div class="section-heading"><h2 id="signalsHeading">Live Signals</h2><span class="source-tag">Rule based · Read only</span></div>
+      <p id="signalsStatus" class="section-note" role="status">Waiting for fresh source observations.</p>
+      <div class="signal-summary"><article class="card"><div class="label">Technical-condition strength</div><div id="signalsStrength" class="value">Insufficient data</div><p class="card-note">Complementary condition scores, not probabilities or forecasts.</p></article><article class="card"><div class="label">Entry assessment</div><div id="signalsEntry" class="value">Warming up</div><p id="signalsStrategy" class="card-note">Momentum Breakout · Starter</p></article></div>
+      <p id="signalsMessage" class="section-note"></p><ul id="signalsWarnings" class="signal-warning"></ul>
+      <details class="chart-diagnostics"><summary>Entry conditions, risk unknowns and strength factors</summary><ul id="signalsConditions"></ul><ul id="signalsUnknowns"></ul><div class="holder-table-scroll"><table class="signal-factors"><thead><tr><th>Factor / window</th><th>Value</th><th>Direction</th><th>Weight</th><th>Contribution</th></tr></thead><tbody id="signalsFactors"></tbody></table></div><p id="signalsCoverage" class="card-note"></p></details>
+      <details class="chart-diagnostics"><summary>Manual / paper position</summary>
+        <p class="section-note">Start in paper mode. Logging a position does not execute a trade. Price, currency and entry time must be entered explicitly.</p>
+        <form id="signalsPositionForm" class="chart-controls">
+          <label>Tracking mode <select id="signalsPositionMode"><option value="paper">Paper</option><option value="reported-real">Manually reported real position</option></select></label>
+          <label>Entry price <input id="signalsEntryPrice" type="number" min="0" step="any" required></label><label>Currency <input id="signalsCurrency" maxlength="12" required></label>
+          <label>Entry time (local) <input id="signalsEntryTime" type="datetime-local" step="1" required></label><label>Size (tokens, optional) <input id="signalsSize" type="number" min="0" step="any"></label>
+          <label>Stop loss % (0 disables) <input id="signalsStop" type="number" min="0" max="99" step="any" value="5" required></label>
+          <label>Take profit % (0 disables) <input id="signalsTarget" type="number" min="0" max="1000" step="any" value="10" required></label>
+          <label>Trailing stop % (0 disables) <input id="signalsTrailing" type="number" min="0" max="99" step="any" value="5" required></label>
+          <label>Exit confirmations <input id="signalsExitConfirmations" type="number" min="1" max="20" value="2" required></label>
+          <button type="submit" id="signalsLogPosition" disabled>Log position</button><button type="button" id="signalsClosePosition" disabled>Mark position closed</button>
+        </form><p id="signalsPosition" class="section-note">No tracked position in this token/source/currency context.</p>
+      </details>
+      <details class="chart-diagnostics"><summary>Strategy and profile settings</summary>
+        <p class="section-note">Editable engineering heuristics, without measured profitability. Required price/volume/liquidity inputs gate entry; optional missing evidence stays visible. Existing positions retain their original exit plan.</p>
+        <form id="signalsSettingsForm" class="chart-controls"><label>Strategy <select id="signalsStrategySelect"><option value="momentum-breakout">Momentum Breakout</option></select></label><label>Profile name <input id="signalsProfile" value="Starter" maxlength="60" required></label><div id="signalsParameters" class="signal-parameters"></div><button type="submit">Apply profile</button></form>
+        <label class="section-note"><input id="signalsNotifications" type="checkbox"> Enable Chrome notifications (optional permission; at most one per minute)</label>
+      </details>
+      <details class="chart-diagnostics"><summary>Signal history and paper evaluation</summary><ul id="signalsHistory"></ul><p class="card-note">History is bounded. Exports include retained chronological observations and separate outcome inspection; no win rate or accuracy claim.</p><button id="signalsExport" type="button">Copy evaluation JSONL</button><textarea id="signalsEvaluation" hidden readonly aria-label="Paper evaluation export"></textarea></details>
+      <details class="chart-diagnostics"><summary>Source and latency diagnostics</summary><pre id="signalsDiagnostics"></pre></details>
     </section>
     <section class="analysis-recording chart-collector" aria-labelledby="recordingHeading">
       <div class="section-heading"><h2 id="recordingHeading">Record for AI analysis</h2><span class="source-tag">Local observation log</span></div>

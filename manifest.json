@@ -4,6 +4,7 @@
   "version": "0.6.0",
   "description": "Free Axiom statistics, holder intelligence, precise local charts and IndexedDB observation history.",
   "permissions": ["storage", "tabs"],
+  "optional_permissions": ["notifications"],
   "host_permissions": ["https://axiom.trade/*"],
   "optional_host_permissions": ["https://api.geckoterminal.com/*"],
   "background": {"service_worker": "background.js"},

@@ -94,6 +94,7 @@
     await runTradingStorageChecks(phase, checks);
     await runLiquidityAlertStorageChecks(phase, checks, liquidity);
     await runRecordingStorageChecks(phase, checks);
+    await runLiveSignalStorageChecks(phase, checks);
     liquidity.close(); archive.close();
     document.body.dataset.testStatus = "passed";
     document.getElementById("results").textContent = JSON.stringify({phase, passed: checks.length, checks});
