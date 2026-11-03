@@ -67,6 +67,38 @@ test("Serialized service makes Start/Stop races deterministic and keeps stopped 
   clock += 5000; assert.equal(await service.observe(snapshot(clock), 42, clock), null); assert.equal((await service.report()).text, stopped.text);
   assert.equal((await archive.load()).rows.length, 2);
 });
+
+test("Starting price stays fixed across price updates, Stop, and archive restoration", async () => {
+  let clock = start;
+  const archive = disk(), service = R.createService({archive, now: () => clock});
+  assert.equal((await service.start(snapshot(), options)).session.startPrice, "$2");
+  clock += 5000;
+  const next = snapshot(clock); next.stats.price = "$3";
+  await service.observe(next, 42, clock);
+  assert.equal((await service.stop()).session.startPrice, "$2");
+  const restored = R.createService({archive, now: () => clock + 60000});
+  const saved = (await restored.status()).session;
+  assert.equal(saved.startPrice, "$2");
+  assert.equal(saved.endPrice, "$3");
+  assert.equal(saved.endedAt - saved.startedAt, 5000);
+});
+
+test("Ending price uses observations between log intervals and never takes another token's price", async () => {
+  let clock = start;
+  const service = R.createService({archive: disk(), now: () => clock});
+  await service.start(snapshot(), options);
+  clock += 1000;
+  const next = snapshot(clock); next.stats.price = "$4";
+  await service.observe(next, 42, clock);
+  const stopped = await service.stop();
+  assert.equal(stopped.session.count, 1);
+  assert.equal(stopped.session.endPrice, "$4");
+  clock += 1000; await service.start(snapshot(clock), options);
+  const other = snapshot(clock); other.chartContext = {...context, sourceKey: "other"}; other.stats.price = "$99";
+  assert.equal((await service.observe(other, 42, clock)).session.endPrice, "$2");
+  await service.start(snapshot(clock), options); clock += 11000;
+  assert.equal((await service.stop()).session.endPrice, null);
+});
 test("Worker restart preserves entries but marks an active recording interrupted at the last persisted log", async () => {
   const archive = disk(), service = R.createService({archive, now: () => start}); await service.start(snapshot(), options);
   const restarted = R.createService({archive, now: () => start + 50000}), result = await restarted.report();

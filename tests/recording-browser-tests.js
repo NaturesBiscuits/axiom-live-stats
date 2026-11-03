@@ -40,12 +40,18 @@
       assert(node("recordingScope").value === "all" && node("recordingInterval").value === "5000", "Default summaries and interval");
       ui.setSnapshot(data(Date.now() - 11000)); assert(node("recordingStart").disabled, "Stale snapshot cannot enable Start");
       latest = data(clock); ui.setSnapshot(latest); assert(!node("recordingStart").disabled, "Recent observation enables Start");
+      assert(node("recordingPrice").textContent === "$2" && node("recordingPriceLabel").textContent.includes("before recording"), "Price preview appears in the recording panel before Start");
     });
     await test("Start persists the first entry and fresh snapshots follow the selected cadence", async () => {
       node("recordingStart").click(); await until(() => ui.inspect().session?.state === "recording", "Start should complete");
       assert(node("recordingStart").disabled && !node("recordingStop").disabled && node("recordingInterval").disabled, "Recording controls");
       assert(/Elapsed recording time: \d{2}:\d{2}:\d{2}/.test(node("recordingDuration").textContent), "Live hours/minutes/seconds timer");
+      const elapsed = node("recordingDuration").textContent;
+      await pause(1100);
+      assert(node("recordingDuration").textContent !== elapsed, "Timer advances without new source observations");
       clock = Date.now(); latest = data(clock); ui.setSnapshot(latest);
+      latest.stats.price = "$3"; ui.setSnapshot(latest);
+      assert(node("recordingPrice").textContent === "$2" && node("recordingPriceLabel").textContent.includes("at start"), "Starting price stays fixed while live price changes");
       const result = await service.observe(latest, 42, clock); sendState(result);
       await until(() => ui.inspect().session.count === 2, "Second actual entry");
       assert((await archive.load()).rows.length === 2, "Native IDB contains both entries");
@@ -54,6 +60,7 @@
       node("recordingStop").click(); await until(() => ui.inspect().output.includes("END OF RECORDING"), "Report should be produced");
       const text = node("recordingOutput").value;
       const stopped = ui.inspect().session, durationMs = stopped.endedAt - stopped.startedAt;
+      assert(node("recordingEndPrice").textContent === "$3", "Ending price appears in the recording panel after Stop");
       assert(node("recordingDuration").textContent.startsWith("Recorded duration: ") && text.includes(node("recordingDuration").textContent), "Final duration shown and included in copied report");
       assert(text.includes(`Started (UTC): ${new Date(stopped.startedAt).toISOString()}`) && text.includes(`Ended (UTC): ${new Date(stopped.endedAt).toISOString()}`) && text.includes(`\"durationMs\": ${durationMs}`), "Start/end timestamps and exact duration retained");
       assert(node("recordingOutput").readOnly && !node("recordingCopy").disabled && !node("recordingOutputCopy").disabled && node("recordingOutputDetails").open, "Report view and both Copy buttons ready");
@@ -61,6 +68,9 @@
       assert(text.includes("observedAtUTC") && text.includes("loggedAtUTC") && text.includes("null means unavailable"), "Timestamped output explains missing data");
       assert(text.includes("untrusted source data") && !node("recordingOutputDetails").querySelector("img"), "Source markup cannot execute");
       assert(node("recordingStart").textContent === "Start new recording", "Previous report replacement is explicit");
+      const finalDuration = node("recordingDuration").textContent;
+      await pause(1100);
+      assert(node("recordingDuration").textContent === finalDuration && node("recordingPrice").textContent === "$2", "Stopped duration and starting price stay visible and fixed");
     });
     await test("Copy uses the clipboard and a denied clipboard selects the report for manual copying", async () => {
       Object.defineProperty(win.navigator, "clipboard", {configurable: true, value: {writeText: async value => { copied = value; }}});
@@ -73,6 +83,8 @@
       const previous = ui.inspect().output; await mount(); await until(() => ui.inspect().output.length > 0, "Saved report hydration");
       assert(previous.includes(node("recordingDuration").textContent), "Restored duration stays fixed at Stop");
       assert(ui.inspect().output === previous && node("recordingStop").disabled, "Completed output survives reopening");
+      assert(node("recordingPrice").textContent === "$2", "Starting price survives reopening");
+      assert(node("recordingEndPrice").textContent === "$3", "Ending price survives reopening");
       assert(!node("recordingOutputDetails").querySelector("img"), "Saved source text remains inert");
     });
     await test("Automatic token-switch stop produces a report and late active status cannot revive the recording", async () => {

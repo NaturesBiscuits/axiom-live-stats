@@ -35,15 +35,22 @@
     if (!INTERVALS.includes(intervalMs) || !["all", "supply"].includes(scope)) throw new Error("Unsupported recording interval or scope.");
     return {version: 1, id: `${at}-${Math.random().toString(36).slice(2, 10)}`, state: "recording", startedAt: at, endedAt: null,
       stopReason: null, sourceTabId, context: clone(contextOf(snapshot)), title: String(snapshot.title ?? "Axiom token"),
+      startPrice: snapshot.stats.price ?? null,
+      latestPrice: snapshot.stats.price ?? null, latestPriceObservedAt: snapshot.marketObservedAt, endPrice: null,
       intervalMs, scope, count: 0, bytes: 0, lastLoggedAt: null, lastObservedAt: null, storageError: null};
   }
   function stop(session, at, reason = "user-stopped") {
     if (session?.state === "recording") { session.state = "stopped"; session.endedAt = Math.max(session.startedAt, Math.min(session.startedAt + MAX_DURATION_MS, at));
+      session.endPrice = fresh(session.latestPriceObservedAt, session.endedAt) ? session.latestPrice ?? null : null;
       session.stopReason = at >= session.startedAt + MAX_DURATION_MS ? "one-hour-limit" : reason; }
   }
   function consider(session, snapshot, tabId, at, extras = () => ({})) {
     if (session?.state !== "recording" || tabId !== session.sourceTabId) return null;
     if (scopeKey(contextOf(snapshot)) !== scopeKey(session.context)) { stop(session, at, "source-token-or-network-changed"); return null; }
+    if (fresh(snapshot.marketObservedAt, at) && snapshot.marketObservedAt >= (session.latestPriceObservedAt ?? -Infinity) &&
+        snapshot.marketObservedAt <= session.startedAt + MAX_DURATION_MS) {
+      session.latestPrice = snapshot.stats?.price ?? null; session.latestPriceObservedAt = snapshot.marketObservedAt;
+    }
     if (at - session.startedAt >= MAX_DURATION_MS) { stop(session, at, "one-hour-limit"); return null; }
     const observedAt = snapshot.marketObservedAt;
     if (!fresh(observedAt, at) || observedAt <= (session.lastObservedAt ?? -Infinity) ||

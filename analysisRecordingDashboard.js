@@ -17,7 +17,11 @@
     node("recordingStart").textContent = session && !active ? "Start new recording" : "Start recording";
     node("recordingStatus").textContent = message || (active ? `Recording ${session.title} · ${session.count} entries. Keep the Axiom source open; dashboard can be closed.` :
       session ? `Stopped · ${session.count} entries · ${session.stopReason}. Copy the report below to your LLM.` : fresh ? "Ready to record the current Axiom token." : "Waiting for recent Axiom observations. Open or refresh its token page.");
-    node("recordingDuration").textContent = session ? `${active ? "Elapsed recording time" : "Recorded duration"}: ${duration(Math.min(3600000, (active ? Date.now() : session.endedAt) - session.startedAt))}` : "Recorded duration: —";
+    node("recordingPriceLabel").textContent = session ? "Price at start (Axiom display)" : "Price before recording (Axiom display)";
+    node("recordingPrice").textContent = (session ? session.startPrice : fresh ? snapshot?.stats?.price : null) || "Unavailable";
+    node("recordingEndPrice").textContent = session?.state === "stopped" ? session.endPrice ?? "Unavailable" : "Available after Stop";
+    node("recordingDuration").textContent = session ? `${active ? "Elapsed recording time" : "Recorded duration"}: ${duration(Math.min(3600000, (active ? Date.now() : session.endedAt) - session.startedAt))}` : "Recorded duration: 00:00:00";
+    node("recordingDuration").dataset.state = active ? "recording" : "stopped";
     node("recordingTimes").textContent = session ? `Started (UTC): ${date(session.startedAt)} · ${active ? "Latest log (UTC)" : "Ended (UTC)"}: ${date(active ? session.lastLoggedAt : session.endedAt)} · ${session.intervalMs / 1000}s target interval · ${session.scope === "supply" ? "Supply & Valuation" : "All analyzer summaries"}${session.storageError ? ` · Storage error: ${session.storageError}; copy this report before closing.` : ""}` : "";
     node("recordingOutputDetails").hidden = !output; node("recordingOutputSummary").textContent = `Copyable LLM report · ${output.length.toLocaleString()} characters`;
     if (node("recordingOutput").value !== output) node("recordingOutput").value = output;

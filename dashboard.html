@@ -38,13 +38,18 @@
     </section>
     <section class="analysis-recording chart-collector" aria-labelledby="recordingHeading">
       <div class="section-heading"><h2 id="recordingHeading">Record for AI analysis</h2><span class="source-tag">Local observation log</span></div>
+      <div class="recording-summary">
+        <div><span id="recordingPriceLabel" class="label">Price before recording</span><p id="recordingPrice" class="value">Unavailable</p></div>
+        <div><span class="label">Price at end (Axiom display)</span><p id="recordingEndPrice" class="value">Available after Stop</p></div>
+        <div><p id="recordingDuration" role="timer" aria-live="off">Recorded duration: 00:00:00</p></div>
+      </div>
       <div class="chart-controls">
         <label>Include <select id="recordingScope"><option value="all">All analyzer summaries</option><option value="supply">Supply &amp; Valuation only</option></select></label>
         <label>Log interval <select id="recordingInterval"><option value="5000">5 seconds</option><option value="15000">15 seconds</option><option value="30000">30 seconds</option></select></label>
         <button id="recordingStart" type="button" disabled>Start recording</button><button id="recordingStop" type="button" disabled>Stop &amp; produce report</button><button id="recordingCopy" type="button" disabled>Copy report</button>
       </div>
       <p id="recordingStatus" class="section-note" role="status" aria-live="polite">Waiting for Axiom observations.</p>
-      <p id="recordingDuration" class="section-note">Recorded duration: —</p><p id="recordingTimes" class="card-note"></p>
+      <p id="recordingTimes" class="card-note"></p>
       <p class="card-note">Records one token and source tab with UTC observation times. Stops on token/network changes, after 1 hour, or at the recording size limit. Starting a new recording replaces the previous local report; copy it first. No data is sent to an AI service.</p>
       <details id="recordingOutputDetails" class="chart-diagnostics" hidden><summary id="recordingOutputSummary">Copyable LLM report</summary>
         <div class="chart-controls"><button id="recordingOutputCopy" type="button" disabled>Copy report to clipboard</button></div>
