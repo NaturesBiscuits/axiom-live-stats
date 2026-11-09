@@ -256,6 +256,7 @@
     const nativeBalance = explicit(cells.balance, "native-balance") || explicit(cells.balance, "sol-balance") ||
       fragments(cells.balance)[0] || null;
     const fundingLink = cells.funding?.querySelector('a[href*="/tx/"], a[href*="/transaction/"]');
+    const fundingIdentity = publicAddress(cells.funding);
     return {
       rank: value(cells.rank),
       walletDisplay: explicit(cells.wallet, "wallet") || fragments(cells.wallet)[0] || null,
@@ -268,10 +269,12 @@
         activityParts.map(part => part.replace(/^\((.*)\)$/, "$1").trim())
           .find(part => /\b(?:last\s*active|ago|just now)\b/i.test(part) || /^\d+(?:\.\d+)?\s*[smhdw]$/.test(part)) || null,
       boughtAmount: bought.amount,
+      boughtCurrency: currency(cells.bought),
       buyCount: bought.count,
       averageBuy: bought.average,
       averageBuySource: bought.averageSource,
       soldAmount: sold.amount,
+      soldCurrency: currency(cells.sold),
       averageSell: sold.average,
       averageSellSource: sold.averageSource,
       boughtTokenQuantity: bought.tokenQuantity,
@@ -293,6 +296,8 @@
       fundingSourceLabel: explicit(cells.funding, "funding-source") || value(fundingLink?.querySelector(".truncate")) ||
         fragments(cells.funding)[0] || null,
       fundingTransactionUrl: transactionUrl(cells.funding),
+      fundingSourceAddress: fundingIdentity.address,
+      fundingSourceIdentityStatus: fundingIdentity.status,
       holdingDuration: value(cells.held),
       // Retain secondary lines and display context without storing HTML.
       displayedColumns: Object.fromEntries(["wallet", "balance", "bought", "sold", "pnl", "fees", "remaining", "funding", "held"]

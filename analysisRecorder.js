@@ -25,6 +25,7 @@
         ["price", "marketCap", "supply", "liquidity", "globalFees", "ath", "volume5m", "buys", "sells", "netVolume", "holders", "bundlers", "top10Holders"])},
       tokenInfo: snapshot.tokenInfo ? pick(snapshot.tokenInfo, ["source", "observedAt", "status", "tiles", "token", "developer", "funding"]) : {status: "unavailable"},
       holders: extras?.holders ?? {status: "unavailable", reason: "No matching current holder extraction"},
+      bundlerDetection: extras?.bundlerDetection ?? {status: "unavailable", score: null},
       liquidity: extras?.liquidity ?? {status: "unavailable", reason: "No matching liquidity attempts"},
       trading: extras?.trading ?? {status: "unavailable", reason: "No matching observed trade feed"}};
   }
@@ -120,6 +121,7 @@
       "- Holder/trading coverage is partial. Trading summaries are rolling 60-second observation-time windows and can include observations before Start; successive windows overlap and must not be summed. Zero counts need coverage to be meaningful.",
       "- holders.rows contains the currently rendered holder observations at each sample when available, including unresolved rows. Rows can move or disappear on scrolling: array index, rank, display names and shortened addresses are not wallet identities. Use full resolved walletAddress only. Older recordings may omit rows.",
       "- Holder rows preserve their own observedAt, extractionId, currency, Axiom bundler flag and displayedColumns text. Relative Last Active, Funding and Held ages are displayed text at observation time, not exact event timestamps. averageBuy/averageSell are Axiom-displayed averages with unspecified price/valuation basis; null means not available, and no average is calculated from totals.",
+      "- bundlerDetection is a separate local heuristic suspicion score, not a probability or proof of bundling. Signal ratios use their listed observed denominators; repeated values, member addresses, duplicate rows, weights and contributions are included. Missing on-chain/launch/transfer evidence stays unavailable. Correlated patterns and rounded balances can occur naturally. Axiom's classification remains separate.",
       "- Holder coverage stays partial: keep the Axiom Holders tab open and scroll manually to expose other wallets. Only rows present at log samples are recorded; retainedSessionIdentities is a cache count, not a saved complete wallet list. Source times may predate logging. Liquidity attempts/alerts retain their own times, cause unverified and potentially older evidence. Individual trades are omitted. Optional historical provider data is not fetched by recording.",
       "", "HOW TO READ THE COMPACT DATA",
       "- No samples, fields or precision are removed. Read the baseline once, then the field timelines. Unlisted paths stay equal to baseline; timelines are independent, not a chain of snapshot patches.",

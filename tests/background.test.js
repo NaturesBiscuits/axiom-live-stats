@@ -49,6 +49,7 @@ function worker(stored = {}, localSaved = {}, options = {}) {
     AxiomLiveSignalArchive: {createArchive: () => ({load: async () => { if (options.failSignalsRead) throw new Error("Signal read failure"); return structuredClone(localSaved.signals ?? null); },
       save: async saved => { if (options.failSignalsWrite) throw new Error("Signal write failure"); localSaved.signals = structuredClone(saved); }})},
     AxiomSupply: require("../supplyValuation.js"), AxiomHolderConcentration: require("../holderConcentration.js"),
+    AxiomBundlerDetection: require("../bundlerDetection.js"),
     AxiomAnalysisRecorder: {...require("../analysisRecorder.js"), createService: config => require("../analysisRecorder.js").createService({...config, now: () => clock})},
     AxiomAnalysisRecordingArchive: {createArchive: () => ({
       async load() { if (options.failRecordingReads) throw new Error("Recording read fixture failure"); return structuredClone(localSaved.recording ?? {session: null, rows: []}); },
@@ -158,6 +159,27 @@ function recordingSnapshot(at, key = "record-a") {
 }
 const recordingSender = {url: "chrome-extension://fixture/dashboard.html"};
 const recordingRequest = (instance, type, args = {}) => new Promise(resolve => instance.send({type, ...args}, recordingSender, resolve));
+
+test("Bundler detection is dashboard-only, source-isolated and included in full recordings", async () => {
+  const instance = worker(), at = instance.now(), snapshot = recordingSnapshot(at), context = snapshot.chartContext;
+  snapshot.holdersIntelligence = {tokenKey: snapshot.tokenKey, context, extractedAt: at, extractionId: "bundle-worker", activeTable: {kind: "holders"}, tableStatus: "available",
+    rows: Array.from({length: 10}, (_, i) => ({walletAddress: "0x" + (i + 100).toString(16).padStart(40, "0"), identityStatus: "resolved",
+      nativeBalance: "0.03", balanceCurrency: "ETH", boughtAmount: "$25", remainingPercentage: "1%", axiomBundler: false,
+      tokenContext: context, observedAt: at, extractionId: "bundle-worker"}))};
+  let called = false;
+  instance.send({type: "AXIOM_BUNDLER_GET", sourceTabId: 42}, chartSender, () => { called = true; }); await flush(); assert.equal(called, false);
+  instance.send({type: "AXIOM_STATS_UPDATE", snapshot}, chartSender); await flush();
+  const scope = require("../analysisRecorder.js").scopeKey(context);
+  const result = await recordingRequest(instance, "AXIOM_BUNDLER_GET", {sourceTabId: 42, scope});
+  assert.equal(result.ok, true); assert.equal(result.result.score, 35); assert.equal(result.result.sourceTabId, 42);
+  assert.equal((await recordingRequest(instance, "AXIOM_BUNDLER_GET", {sourceTabId: 99, scope})).ok, false);
+  assert.equal((await recordingRequest(instance, "AXIOM_BUNDLER_GET", {sourceTabId: 42, scope: "other"})).ok, false);
+  await recordingRequest(instance, "AXIOM_RECORDING_START", {intervalMs: 5000, scope: "all"});
+  assert.deepEqual(instance.localSaved.recording.rows[0].bundlerDetection, result.result);
+  instance.advance(11000);
+  const stale = await recordingRequest(instance, "AXIOM_BUNDLER_GET", {sourceTabId: 42, scope});
+  assert.equal(stale.result.score, null); assert.equal(stale.result.status, "stale-or-missing-source");
+});
 
 test("Holder wallet details survive recording, scroll changes, missing views, and compact report restoration", async () => {
   const instance = worker(), at = instance.now(), snapshot = recordingSnapshot(at);
@@ -341,7 +363,7 @@ test("rolling chart delivery is live but persistence is batched every 15 seconds
   assert.equal(instance.localWrites.length, 0);
   assert.equal(instance.archiveWrites.length, 1);
   assert.equal(instance.localSaved.archiveRows.length, 15);
-  assert.deepEqual(instance.imports, ["rollingChartCollector.js", "sampleArchive.js", "liquidityHistory.js", "liquidityAlerts.js", "holderTableExtractor.js", "tradingParticipation.js", "tradingArchive.js", "supplyValuation.js", "holderConcentration.js", "analysisRecorder.js", "analysisRecordingArchive.js", "liveSignals.js", "liveSignalArchive.js", "liveSignalService.js"], "Only local analyzer modules are loaded");
+  assert.deepEqual(instance.imports, ["rollingChartCollector.js", "sampleArchive.js", "liquidityHistory.js", "liquidityAlerts.js", "holderTableExtractor.js", "tradingParticipation.js", "tradingArchive.js", "supplyValuation.js", "holderConcentration.js", "bundlerDetection.js", "analysisRecorder.js", "analysisRecordingArchive.js", "liveSignals.js", "liveSignalArchive.js", "liveSignalService.js"], "Only local analyzer modules are loaded");
   assert.equal(instance.stored.chartState, undefined, "No per-second chart session-storage writes");
 });
 

@@ -181,6 +181,7 @@ function render(snapshot, sourceTabId = selectedSourceTabId) {
   if ((snapshot.stats.netVolume || "").startsWith("-")) net.classList.add("negative");
   document.getElementById("updatedAt").textContent = new Date(lastSeenAt).toLocaleTimeString();
   renderHolders(snapshot);
+  globalThis.AxiomBundlerUI?.setSnapshot(snapshot, selectedSourceTabId);
   AxiomTokenInfoUI.render(snapshot, currentHolderData);
   globalThis.AxiomSupplyUI?.setSnapshot(snapshot);
   globalThis.AxiomRecordingUI?.setSnapshot(snapshot);

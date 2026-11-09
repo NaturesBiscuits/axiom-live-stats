@@ -121,6 +121,16 @@
       assert(rows.length === 2 && !rows[0].axiomBundler && rows[1].axiomBundler, "Badge scope/classification");
       assert(rows.every(row => row.identityStatus === "unresolved"), "Names are not identities");
     });
+    await test("Funding identity requires a full displayed address and Bought currency never inherits native balance", () => {
+      const table = makeTable(rowHtml(addressA)), cells = table.firstElementChild.firstElementChild.children;
+      let extracted = AxiomHolderTableExtractor.extract(table).rows[0];
+      assert(extracted.fundingSourceAddress === null && extracted.fundingSourceIdentityStatus === "unresolved", "Transaction link does not identify funder");
+      cells[7].insertAdjacentHTML("beforeend", `<a href="https://solscan.io/account/${addressB}">${addressB}</a>`);
+      cells[3].innerHTML = '<img alt="SOL"><span>0.03</span><span>3 buys</span>';
+      extracted = AxiomHolderTableExtractor.extract(table).rows[0];
+      assert(extracted.fundingSourceAddress === addressB && extracted.fundingSourceIdentityStatus === "resolved", "Actual full funding address captured");
+      assert(extracted.boughtCurrency === "SOL" && extracted.boughtAmount === "0.03" && extracted.walletAddress === addressA, "Bought units and wallet/funder identities remain separate");
+    });
     await test("Captured BNB rows map Fees Paid and ignore Follow Sell controls", async () => {
       const table = await capturedTable("bnb");
       let clicks = 0;
@@ -578,6 +588,8 @@
       await loadScript(doc, new URL("../tradingParticipation.js", location.href).href);
       await loadScript(doc, new URL("../tradingDashboard.js", location.href).href);
       await loadScript(doc, new URL("../holderConcentration.js", location.href).href);
+      await loadScript(doc, new URL("../bundlerDetection.js", location.href).href);
+      await loadScript(doc, new URL("../bundlerDashboard.js", location.href).href);
       await loadScript(doc, new URL("../vendor/lightweight-charts.standalone.production.js", location.href).href);
       await loadScript(doc, new URL("../chartView.js", location.href).href);
       await loadScript(doc, new URL("../liquidityHistory.js", location.href).href);

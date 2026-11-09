@@ -10,6 +10,7 @@ importScripts("tradingParticipation.js");
 importScripts("tradingArchive.js");
 importScripts("supplyValuation.js");
 importScripts("holderConcentration.js");
+importScripts("bundlerDetection.js");
 importScripts("analysisRecorder.js");
 importScripts("analysisRecordingArchive.js");
 importScripts("liveSignals.js");
@@ -71,6 +72,7 @@ function recordingExtras(snapshot, at, sourceTabId, {allActiveAlerts = false, in
   const activityHistory = activity.history.filter(event => fromThisTab(event.scopeKey) && event.triggeredAt <= at);
   const includedHistory = allActiveAlerts ? activityHistory.filter((event, index) => index >= activityHistory.length - 5 || event.recoveredAt === null) : activityHistory.slice(-5);
   return {
+    ...(includeHolderRows ? {bundlerDetection: AxiomBundlerDetection.analyze({snapshot, trades: tradeRows, coverage, sourceTabId, now: at})} : {}),
     holders: {source: "Axiom DOM; partial rendered table", extractedAt: matched ? holders.extractedAt ?? null : null,
       tableStatus: matched ? holders.tableStatus : "unavailable", renderedHolders: matched ? holders.renderedHolders : null,
       renderedBundlers: matched ? holders.renderedBundlers : null, unresolvedRendered: matched ? holders.unresolvedRendered : null,
@@ -350,6 +352,19 @@ async function ensureDashboard(activate = false) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "AXIOM_BUNDLER_GET") {
+    if (sender.url !== chrome.runtime.getURL("dashboard.html")) return;
+    void (async () => {
+      const saved = await chrome.storage.session.get(["latestSnapshot", "sourceTabId"]);
+      const snapshot = signalSnapshots.get(message.sourceTabId) ?? (saved.sourceTabId === message.sourceTabId ? saved.latestSnapshot : null);
+      if (!snapshot || message.scope !== AxiomAnalysisRecorder.scopeKey(snapshot.chartContext)) throw new Error("Selected bundler source changed; waiting for matching observations.");
+      await tradingQueue;
+      const current = signalSnapshots.get(message.sourceTabId);
+      if (current && message.scope !== AxiomAnalysisRecorder.scopeKey(current.chartContext)) throw new Error("Selected bundler source changed during evaluation.");
+      sendResponse({ok: true, result: recordingExtras(snapshot, Date.now(), message.sourceTabId, {includeHolderRows: true}).bundlerDetection});
+    })().catch(error => sendResponse({ok: false, error: error.message}));
+    return true;
+  }
   if (["AXIOM_SIGNALS_STATUS", "AXIOM_SIGNALS_SETTINGS", "AXIOM_SIGNALS_POSITION", "AXIOM_SIGNALS_CLOSE", "AXIOM_SIGNALS_NOTIFICATIONS", "AXIOM_SIGNALS_EXPORT"].includes(message?.type)) {
     if (sender.url !== chrome.runtime.getURL("dashboard.html")) return;
     void (async () => {

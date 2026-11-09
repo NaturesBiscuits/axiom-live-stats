@@ -17,6 +17,8 @@
   <script src="tradingParticipation.js" defer></script>
   <script src="tradingDashboard.js" defer></script>
   <script src="holderConcentration.js" defer></script>
+  <script src="bundlerDetection.js" defer></script>
+  <script src="bundlerDashboard.js" defer></script>
   <script src="vendor/lightweight-charts.standalone.production.js" defer></script>
   <script src="chartView.js" defer></script>
   <script src="liquidityHistory.js" defer></script>
@@ -185,6 +187,21 @@
       <p class="table-status" id="liquidityStatus" role="status">Waiting for source</p><p class="card-note" id="liquidityIdentity"></p>
       <p class="section-note">Local DOM reads approximately every 5s, including new coins. Charts fit available observations and break across missing readings or delays over 7.5s. Window changes require the full recorded duration and a valid baseline within ±2.5s of the window start; they end at the latest valid observation. Coverage is valid occupied 5s slots / expected slots between the first and last retained attempts in this currency. USD liquidity changes are observed valuations, not confirmed additions/removals or a safe-to-buy guarantee. DOM readability does not verify Axiom's upstream freshness. Separate IndexedDB retention: 24 hours / 10,000 actual attempts globally, saved in 15s batches. After retention removes the beginning, summaries start at the first retained observation.</p>
       </details>
+    </section>
+    <section class="chart-collector bundler-detection" aria-labelledby="bundlerHeading">
+      <div class="section-heading"><div><p class="eyebrow">LOCAL PATTERN ANALYSIS</p><h2 id="bundlerHeading">Bundler Detection</h2></div><span class="source-tag">Explainable heuristic</span></div>
+      <div class="chart-summary">
+        <article class="card"><div class="label">Bundling suspicion</div><div class="value" id="bundlerScore">Unavailable</div><p class="card-note">Heuristic score · not a calibrated probability</p></article>
+        <article class="card"><div class="label">Observed signal coverage</div><div class="value" id="bundlerEvidenceCoverage">Unavailable</div><p class="card-note">Available signal weights · partial DOM data</p></article>
+        <article class="card"><div class="label">Axiom Bundlers · separate classification</div><div class="value" id="bundlerAxiomReported">Unavailable</div><p class="card-note">Axiom-reported supply percentage</p></article>
+      </div>
+      <p id="bundlerStatus" class="section-note" role="status">Open Axiom's Holders tab to analyze current rows.</p>
+      <p id="bundlerCoverage" class="card-note"></p>
+      <div class="table-scroll"><table class="bundler-signal-table"><thead><tr><th>Signal</th><th>Observed ratio</th><th>Matching / eligible</th><th>Score contribution</th><th>Evidence / limits</th></tr></thead><tbody id="bundlerSignals"></tbody></table></div>
+      <details class="chart-diagnostics"><summary>Repeated values, groups &amp; wallet addresses</summary><div id="bundlerGroups"></div></details>
+      <details class="chart-diagnostics"><summary>Repeated full wallet addresses · duplicate DOM observations</summary><div id="bundlerDuplicates"></div><p class="card-note">Duplicate full addresses count once. Repeated DOM rows do not prove bundling; shortened labels cannot establish duplicate wallets.</p></details>
+      <details class="chart-diagnostics"><summary>Scoring &amp; interpretation</summary><p id="bundlerMethod" class="section-note"></p><p class="section-note">Rounded balances, common trade sizes and shared services can create these patterns naturally. Full addresses identify wallets; labels and shortened addresses do not. Funding links do not verify transfer direction or pre-launch timing. Buy/sell bursts use approximate displayed trade ages, not slots. Low scores or missing evidence do not establish safety.</p></details>
+      <p class="card-note">Current rendered holder rows only. Keep Holders open and scroll manually. Zero values are excluded from repetition patterns. Each signal shows its own denominator. Evidence and wallet groups are included in All analyzer data + holder rows recordings.</p>
     </section>
     <section class="holders-intelligence" aria-labelledby="holdersHeading">
       <div class="section-heading">

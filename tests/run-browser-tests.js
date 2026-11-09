@@ -7,7 +7,7 @@ const {pathToFileURL} = require("node:url");
 const {runPage} = require("./chromium-harness.js");
 const profile = mkdtempSync(join(tmpdir(), "axiom-holder-tests-"));
 (async () => { try {
-  for (const page of ["browser-tests.html", "trading-browser-tests.html", "historical-browser-tests.html", "supply-browser-tests.html", "recording-browser-tests.html", "live-signals-browser-tests.html"]) {
+  for (const page of ["bundler-browser-tests.html", "browser-tests.html", "trading-browser-tests.html", "historical-browser-tests.html", "supply-browser-tests.html", "recording-browser-tests.html", "live-signals-browser-tests.html"]) {
     const output = await runPage(profile, pathToFileURL(resolve(__dirname, page)).href);
     console.log(output.result);
     if (output.status !== "passed") { process.exitCode = 1; break; }
