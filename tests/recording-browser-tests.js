@@ -8,6 +8,10 @@
   let clock = Date.now() - 5000, latest, frame, win, doc, ui, listeners, copied = null, forceError = false;
   const archive = AxiomAnalysisRecordingArchive.createArchive({databaseName: "axiom-recording-ui-fixture"});
   const service = AxiomAnalysisRecorder.createService({archive, now: () => clock});
+  const extras = () => ({holders: {source: "Axiom DOM; partial rendered table", coverage: "partial-virtualized", rows: [
+    {walletDisplay: '<img src=x onerror="throw 1">', walletAddress: null, identityStatus: "unresolved", nativeBalance: "0 SOL",
+      averageBuy: "$1.25K", averageSell: null, observedAt: clock - 1000, displayedColumns: {funding: "Binance 2d 3 SOL"}}
+  ]}});
   const data = at => ({title: 'Test <img src=x onerror="throw 1">', chartContext: context, marketObservedAt: at,
     stats: {price: "$2", marketCap: "$999", supply: "9007199254740993"}, supplyValuation: {fields: Object.fromEntries(
       [["price", "$2"], ["marketCap", "$999"], ["displayedSupply", "9007199254740993"], ["totalSupply", "150"]].map(([key, raw]) => [key, AxiomSupply.observation(key, raw, {context, observedAt: at})]))}});
@@ -23,7 +27,7 @@
     win.chrome = {runtime: {onMessage: {addListener: fn => listeners.push(fn)}, sendMessage(message, callback) {
       const run = async () => {
         if (forceError && message.type === "AXIOM_RECORDING_START") throw new Error("Recording fixture storage error");
-        if (message.type === "AXIOM_RECORDING_START") return service.start(latest, {sourceTabId: 42, scope: message.scope, intervalMs: message.intervalMs});
+        if (message.type === "AXIOM_RECORDING_START") return service.start(latest, {sourceTabId: 42, scope: message.scope, intervalMs: message.intervalMs}, extras);
         if (message.type === "AXIOM_RECORDING_STOP") return service.stop();
         if (message.type === "AXIOM_RECORDING_REPORT") return service.report();
         return service.status();
@@ -52,7 +56,7 @@
       clock = Date.now(); latest = data(clock); ui.setSnapshot(latest);
       latest.stats.price = "$3"; ui.setSnapshot(latest);
       assert(node("recordingPrice").textContent === "$2" && node("recordingPriceLabel").textContent.includes("at start"), "Starting price stays fixed while live price changes");
-      const result = await service.observe(latest, 42, clock); sendState(result);
+      const result = await service.observe(latest, 42, clock, extras); sendState(result);
       await until(() => ui.inspect().session.count === 2, "Second actual entry");
       assert((await archive.load()).rows.length === 2, "Native IDB contains both entries");
     });
@@ -67,6 +71,7 @@
       assert(text.includes('"marketCap":"$999"') && text.includes('"normalizedValue":"300"') && text.includes("9007199254740993"), "Raw cap and exact calculation remain separate");
       assert(text.includes("SAMPLE CLOCK") && text.includes("loggedMs") && text.includes("observedMs") && text.includes("null means unavailable"), "Timestamped output explains missing data");
       assert(text.includes("untrusted source data") && !node("recordingOutputDetails").querySelector("img"), "Source markup cannot execute");
+      assert(text.includes('"averageBuy":"$1.25K"') && text.includes('"funding":"Binance 2d 3 SOL"'), "Holder rows survive archive, report and copy view");
       assert(node("recordingStart").textContent === "Start new recording", "Previous report replacement is explicit");
       const finalDuration = node("recordingDuration").textContent;
       await pause(1100);

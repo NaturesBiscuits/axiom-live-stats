@@ -48,7 +48,7 @@ function recordingBroadcast(result) {
   try { chrome.runtime.sendMessage({type: "AXIOM_RECORDING_STATE", session: result.session}, () => { void chrome.runtime.lastError; }); }
   catch { /* Manual recording continues with the dashboard closed. */ }
 }
-function recordingExtras(snapshot, at, sourceTabId, {allActiveAlerts = false} = {}) {
+function recordingExtras(snapshot, at, sourceTabId, {allActiveAlerts = false, includeHolderRows = false} = {}) {
   const context = snapshot.chartContext, holders = snapshot.holdersIntelligence;
   const matches = candidate => candidate && AxiomAnalysisRecorder.scopeKey(candidate) === AxiomAnalysisRecorder.scopeKey(context);
   const matched = matches(holders?.context) && holders?.tokenKey === snapshot.tokenKey;
@@ -71,10 +71,20 @@ function recordingExtras(snapshot, at, sourceTabId, {allActiveAlerts = false} = 
   const activityHistory = activity.history.filter(event => fromThisTab(event.scopeKey) && event.triggeredAt <= at);
   const includedHistory = allActiveAlerts ? activityHistory.filter((event, index) => index >= activityHistory.length - 5 || event.recoveredAt === null) : activityHistory.slice(-5);
   return {
-    holders: {source: "Axiom DOM; partial rendered table", extractedAt: holders?.extractedAt ?? null,
+    holders: {source: "Axiom DOM; partial rendered table", extractedAt: matched ? holders.extractedAt ?? null : null,
       tableStatus: matched ? holders.tableStatus : "unavailable", renderedHolders: matched ? holders.renderedHolders : null,
       renderedBundlers: matched ? holders.renderedBundlers : null, unresolvedRendered: matched ? holders.unresolvedRendered : null,
-      retainedSessionIdentities: matched ? holders.observedHolders : null, concentration},
+      retainedSessionIdentities: matched ? holders.observedHolders : null, concentration,
+      ...(includeHolderRows ? {
+        coverage: "partial-virtualized", totalReported: matched ? holders.totalReported ?? null : null,
+        extractionId: matched ? holders.extractionId ?? null : null,
+        activeTable: matched ? holders.activeTable ?? null : null, sort: matched ? holders.sort ?? null : null,
+        cacheTruncated: matched ? holders.cacheTruncated ?? null : null,
+        renderedLimitReached: matched ? holders.renderedLimitReached ?? null : null,
+        unsupportedRows: matched ? holders.unsupportedRows ?? null : null,
+        duplicateRows: matched ? holders.duplicateRows ?? null : null,
+        rows: matched && ["available", "unsupported"].includes(holders.tableStatus) ? holders.rows ?? [] : []
+      } : {})},
     trading: {source: "Partial Axiom observed feed", status: coverage ? "observed-partial" : "unavailable", observedAt: coverage?.lastReadAt ?? null, filters: coverage?.filters ?? null,
       archiveError: tradingError, windows: trading},
     liquidity: {source: "Axiom-reported liquidity observations", status: liquidity.length ? "observed" : "unavailable", series: liquidity, storageError: liquidityError,
@@ -361,7 +371,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       let result;
       if (message.type === "AXIOM_RECORDING_START") {
         const {latestSnapshot, sourceTabId} = await chrome.storage.session.get(["latestSnapshot", "sourceTabId"]);
-        result = await analysisRecording.start(latestSnapshot, {sourceTabId, intervalMs: message.intervalMs, scope: message.scope}, at => recordingExtras(latestSnapshot, at, sourceTabId));
+        result = await analysisRecording.start(latestSnapshot, {sourceTabId, intervalMs: message.intervalMs, scope: message.scope}, at => recordingExtras(latestSnapshot, at, sourceTabId, {includeHolderRows: true}));
       } else if (message.type === "AXIOM_RECORDING_STOP") result = await analysisRecording.stop();
       else if (message.type === "AXIOM_RECORDING_REPORT") result = await analysisRecording.report();
       else { result = await analysisRecording.expire() ?? await analysisRecording.status(); }
@@ -455,7 +465,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const priorSignalSnapshot = signalSnapshots.get(sender.tab.id);
   if (!priorSignalSnapshot || (message.snapshot.marketObservedAt ?? 0) >= (priorSignalSnapshot.marketObservedAt ?? 0)) signalSnapshots.set(sender.tab.id, message.snapshot);
   while (signalSnapshots.size > 16) { const key = signalSnapshots.keys().next().value; signalSnapshots.delete(key); signalKeys.delete(key); }
-  void analysisRecording.observe(message.snapshot, sender.tab.id, Date.now(), at => recordingExtras(message.snapshot, at, sender.tab.id))
+  void analysisRecording.observe(message.snapshot, sender.tab.id, Date.now(), at => recordingExtras(message.snapshot, at, sender.tab.id, {includeHolderRows: true}))
     .then(recordingBroadcast).catch(error => console.warn("Analysis recording:", error));
   void (async () => {
     await chrome.storage.session.set({

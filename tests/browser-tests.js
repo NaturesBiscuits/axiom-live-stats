@@ -110,6 +110,8 @@
         fundingSourceLabel: "Binance", fundingTransactionUrl: "https://solscan.io/tx/funding-signature",
         holdingDuration: "14m", axiomBundler: true};
       for (const [key, value] of Object.entries(expected)) assert(row[key] === value, `${key}: ${row[key]}`);
+      assert(row.averageBuy === null && row.averageSell === null, "Missing averages are not calculated from amounts/counts");
+      assert(row.displayedColumns.balance === "3.25 SOL" && row.displayedColumns.bought.includes("3 buys"), "Secondary column text retained");
       for (const key of ["commonFundingSource", "similarSolBalancePatterns", "synchronizedBuys", "sameBlockActivity", "clusterId", "evidenceScore", "clusterConfidence"]) {
         assert(row[key] === null, `${key} must remain null`);
       }
@@ -135,6 +137,8 @@
         holdingDuration: "51m", axiomBundler: false};
       for (const [key, value] of Object.entries(expected)) assert(row[key] === value, `${key}: ${row[key]}`);
       assert(row.fundingTransactionUrl?.startsWith("https://bscscan.com/tx/"), "Funding transaction retained without treating it as wallet identity");
+      assert(row.averageBuy === "$36.6K" && row.averageBuySource === "axiom-parenthesized-average" && row.averageSell === null, "Displayed Avg Buy retained without inventing Avg Sell");
+      assert(row.displayedColumns.funding.includes("55m") && row.displayedColumns.funding.includes("0.134"), "Funding age and amount remain in display context");
       assert(clicks === 0 && table.scrollTop === 0, "Extraction never clicks or scrolls");
     });
     await test("Captured ETH pool and wallet rows preserve tiny amounts and partial identities", async () => {
@@ -145,8 +149,26 @@
       assert(pool.remainingPercentage === "99.97%" && pool.fundingSourceLabel === "Uniswap V4 pool", "Pool fields do not shift");
       assert(wallet.nativeBalance === "0.002" && wallet.lastActive === "3h" && wallet.feesPaid === "0.00001", "Balance subscripts exclude activity text");
       assert(wallet.boughtAmount === "$0.878" && wallet.buyCount === 2 && wallet.remainingTokenValue === "$0.525", "Trade amount/count separated from average and Remaining");
+      assert(wallet.averageBuy === "$4.18K" && tiny.averageBuy === "$1.41M", "Captured headerless holder average display retained");
       assert(tiny.remainingTokenValue === "$0.00000000007" && tiny.remainingPercentage === "0.000000000002%", "Multi-digit zero-count subscripts decoded as displayed strings");
       assert(result.rows.every(row => row.walletAddress === null && row.solBalance === null && !row.axiomBundler), "Abbreviations, protocol and GMGN icons do not imply identity or bundling");
+    });
+    await test("Holder averages require supported display evidence and preserve zero, conflicts and tiny values", async () => {
+      let table = makeTable(rowHtml(addressA));
+      const bought = table.firstElementChild.firstElementChild.children[3];
+      bought.insertAdjacentHTML("beforeend", '<span>($99)</span>');
+      assert(AxiomHolderTableExtractor.extract(table).rows[0].averageBuy === null, "Unexplained parentheses in unknown layouts are not averages");
+      bought.insertAdjacentHTML("beforeend", '<span data-field="avg-buy">$0</span>');
+      assert(AxiomHolderTableExtractor.extract(table).rows[0].averageBuy === "$0", "Explicit zero average is available");
+      table = await capturedTable("bnb");
+      const row = table.querySelector('[style*="position: absolute"]');
+      const sold = row.querySelector('[class*="--holders-sold-min-width"]');
+      sold.insertAdjacentHTML("beforeend", '<span>(<span>$0.0<sub>5</sub>12</span>)</span>');
+      let extracted = AxiomHolderTableExtractor.extract(table).rows[0];
+      assert(extracted.averageSell === "$0.0000012" && extracted.soldAmount === "$0" && extracted.sellCount === 0, "Tiny sell average stays separate from total and count");
+      sold.insertAdjacentHTML("beforeend", '<span>($2)</span>');
+      extracted = AxiomHolderTableExtractor.extract(table).rows[0];
+      assert(extracted.averageSell === null && extracted.averageSellSource === null && extracted.displayedColumns.sold.includes("$2"), "Conflicting averages unavailable while source text retained");
     });
     await test("Nested CSS subscripts preserve complete holder amounts and percentages", async () => {
       const table = await capturedTable("eth");

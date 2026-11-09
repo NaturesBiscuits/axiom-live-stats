@@ -135,7 +135,7 @@
     return null;
   }
 
-  function trade(cell, side) {
+  function trade(cell, side, averageLabeled = false) {
     const parts = fragments(cell);
     const countMatch = parts.join(" ").match(new RegExp(`(?:([\\d,]+)\\s*(?:${side}s?|txns?|transactions?)\\b|\\b${side}s?\\s*[:：]\\s*([\\d,]+))`, "i"));
     // Axiom's Bought/Sold cells display token quantity / transaction count.
@@ -146,11 +146,20 @@
     const rawCount = explicit(cell, `${side}-count`) || countMatch?.[1] || countMatch?.[2] ||
       (ratioCounts.size === 1 ? [...ratioCounts][0] : null);
     const count = rawCount && /^[\d,]+$/.test(rawCount) ? Number(rawCount.replace(/,/g, "")) : null;
+    // Preserve Axiom's average as displayed. Its price/valuation basis is unspecified.
+    // Only the known holder layout or an Avg header establishes parenthesis meaning.
+    const capturedLayout = cell?.className.includes(`--holders-${side === "buy" ? "bought" : "sold"}-min-width`);
+    const averages = new Set(averageLabeled || capturedLayout ? Array.from(cell?.querySelectorAll("span, div") ?? [])
+      .map(node => value(node)?.match(/^\(\s*([$€£]\s*\d[\d,.]*(?:[KMBT])?(?:\s*(?:USD|EUR|GBP))?|\d[\d,.]*(?:[KMBT])?\s+(?:SOL|BNB|ETH|USD))\s*\)$/i)?.[1])
+      .filter(Boolean) : []);
+    const explicitAverage = explicit(cell, `avg-${side}`);
     return {
       amount: explicit(cell, `${side}-amount`) || parts.find(part => !/\b(?:buys?|sells?|txns?|transactions?)\b/i.test(part)) || null,
       tokenQuantity: explicit(cell, `${side}-token-quantity`) || Array.from(cell?.querySelectorAll("span, div") ?? [])
         .map(node => value(node)?.match(/^((?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)[KMBT]?)\s*\/\s*[\d,]+$/i)?.[1]).find(Boolean) || null,
-      count: Number.isSafeInteger(count) ? count : null
+      count: Number.isSafeInteger(count) ? count : null,
+      average: explicitAverage || (averages.size === 1 ? [...averages][0] : null),
+      averageSource: explicitAverage ? "explicit-dom-field" : averages.size === 1 ? "axiom-parenthesized-average" : null
     };
   }
 
@@ -229,8 +238,10 @@
 
   function extractRow(row, cells, schema, context) {
     const walletIdentity = publicAddress(cells.wallet), walletAddress = walletIdentity.address;
-    const bought = trade(cells.bought, "buy");
-    const sold = trade(cells.sold, "sell");
+    const averageLabeled = (field, side) => new RegExp(`Avg\\s+${side}`, "i")
+      .test(value(schema?.cells?.[schema.fields.indexOf(field)]) || "");
+    const bought = trade(cells.bought, "buy", averageLabeled("bought", "Buy"));
+    const sold = trade(cells.sold, "sell", averageLabeled("sold", "Sell"));
     const remainingParts = fragments(cells.remaining);
     const percentageParts = remainingParts.filter(part => part.includes("%"));
     const remainingPercentage = explicit(cells.remaining, "remaining-percentage") ||
@@ -258,7 +269,11 @@
           .find(part => /\b(?:last\s*active|ago|just now)\b/i.test(part) || /^\d+(?:\.\d+)?\s*[smhdw]$/.test(part)) || null,
       boughtAmount: bought.amount,
       buyCount: bought.count,
+      averageBuy: bought.average,
+      averageBuySource: bought.averageSource,
       soldAmount: sold.amount,
+      averageSell: sold.average,
+      averageSellSource: sold.averageSource,
       boughtTokenQuantity: bought.tokenQuantity,
       soldTokenQuantity: sold.tokenQuantity,
       sellCount: sold.count,
@@ -279,6 +294,9 @@
         fragments(cells.funding)[0] || null,
       fundingTransactionUrl: transactionUrl(cells.funding),
       holdingDuration: value(cells.held),
+      // Retain secondary lines and display context without storing HTML.
+      displayedColumns: Object.fromEntries(["wallet", "balance", "bought", "sold", "pnl", "fees", "remaining", "funding", "held"]
+        .map(field => [field, value(cells[field])])),
       axiomBundler: Boolean(row.querySelector('img[alt="Bundler"]')),
       classificationSource: "axiom-dom",
       // Reserved for independently verified data; DOM labels are not cluster evidence.

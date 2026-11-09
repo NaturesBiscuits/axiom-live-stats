@@ -22,7 +22,7 @@
     node("recordingEndPrice").textContent = session?.state === "stopped" ? session.endPrice ?? "Unavailable" : "Available after Stop";
     node("recordingDuration").textContent = session ? `${active ? "Elapsed recording time" : "Recorded duration"}: ${duration(Math.min(3600000, (active ? Date.now() : session.endedAt) - session.startedAt))}` : "Recorded duration: 00:00:00";
     node("recordingDuration").dataset.state = active ? "recording" : "stopped";
-    node("recordingTimes").textContent = session ? `Started (UTC): ${date(session.startedAt)} · ${active ? "Latest log (UTC)" : "Ended (UTC)"}: ${date(active ? session.lastLoggedAt : session.endedAt)} · ${session.intervalMs / 1000}s target interval · ${session.scope === "supply" ? "Supply & Valuation" : "All analyzer summaries"}${session.storageError ? ` · Storage error: ${session.storageError}; copy this report before closing.` : ""}` : "";
+    node("recordingTimes").textContent = session ? `Started (UTC): ${date(session.startedAt)} · ${active ? "Latest log (UTC)" : "Ended (UTC)"}: ${date(active ? session.lastLoggedAt : session.endedAt)} · ${session.intervalMs / 1000}s target interval · ${session.scope === "supply" ? "Supply & Valuation" : "All analyzer data + holder rows"}${session.storageError ? ` · Storage error: ${session.storageError}; copy this report before closing.` : ""}` : "";
     node("recordingOutputDetails").hidden = !output; node("recordingOutputSummary").textContent = `Compact LLM report · ${output.length.toLocaleString()} characters`;
     if (node("recordingOutput").value !== output) node("recordingOutput").value = output;
   }

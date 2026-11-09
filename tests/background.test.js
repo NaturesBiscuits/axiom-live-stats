@@ -159,6 +159,53 @@ function recordingSnapshot(at, key = "record-a") {
 const recordingSender = {url: "chrome-extension://fixture/dashboard.html"};
 const recordingRequest = (instance, type, args = {}) => new Promise(resolve => instance.send({type, ...args}, recordingSender, resolve));
 
+test("Holder wallet details survive recording, scroll changes, missing views, and compact report restoration", async () => {
+  const instance = worker(), at = instance.now(), snapshot = recordingSnapshot(at);
+  const wallet = {rank: "1", walletDisplay: "Named wallet", walletAddress: "0x" + "2".repeat(40), identityStatus: "resolved",
+    nativeBalance: "0", solBalance: null, balanceCurrency: "ETH", lastActive: "2m", boughtAmount: "$20", buyCount: 2,
+    averageBuy: "$1.25K", averageBuySource: "axiom-parenthesized-average", soldAmount: "$0", sellCount: 0,
+    averageSell: null, averageSellSource: null, boughtTokenQuantity: "16K", soldTokenQuantity: "0", unrealizedPnl: "-$3",
+    feesPaid: "0.00001", feesPaidCurrency: "ETH", remainingTokenValue: "$17", remainingPercentage: "1%",
+    tokenQuantity: "9007199254740993", fundingSourceLabel: "Relay", fundingTransactionUrl: "https://etherscan.io/tx/public",
+    holdingDuration: "3h", axiomBundler: true, observedAt: at - 1000, extractionId: "holders-first", tokenContext: snapshot.chartContext,
+    displayedColumns: {funding: "Relay 3mo 0.008 ETH", bought: "$20 16K / 2 ($1.25K)"}};
+  const unresolved = {...wallet, rank: "2", walletAddress: null, identityStatus: "unresolved", axiomBundler: false};
+  const holders = {tokenKey: snapshot.tokenKey, context: snapshot.chartContext, extractedAt: at - 1000, extractionId: "holders-first",
+    tableStatus: "available", totalReported: 1200, renderedHolders: 2, renderedBundlers: 1, unresolvedRendered: 1,
+    observedHolders: 10, cacheTruncated: true, renderedLimitReached: false, unsupportedRows: 0, duplicateRows: 0,
+    activeTable: {kind: "holders"}, sort: {column: "remaining", direction: "descending"}, rows: [wallet, unresolved]};
+  snapshot.holdersIntelligence = holders;
+  instance.send({type: "AXIOM_STATS_UPDATE", snapshot}, chartSender); await flush();
+  assert.equal((await recordingRequest(instance, "AXIOM_RECORDING_START", {intervalMs: 5000, scope: "all"})).ok, true);
+  let recorded = instance.localSaved.recording.rows[0].holders;
+  assert.deepEqual(recorded.rows, holders.rows);
+  assert.equal(recorded.extractedAt, at - 1000); assert.equal(recorded.retainedSessionIdentities, 10);
+  assert.equal(recorded.totalReported, 1200); assert.equal(recorded.cacheTruncated, true);
+  assert.equal(recorded.coverage, "partial-virtualized"); assert.deepEqual(recorded.sort, holders.sort);
+  // Virtualization changes the index; unresolved display-name collisions remain separate rows.
+  instance.advance(5000);
+  const next = recordingSnapshot(instance.now());
+  next.holdersIntelligence = {...holders, renderedHolders: 1, rows: [{...unresolved, rank: "30", remainingTokenValue: "$15", observedAt: instance.now()}]};
+  instance.send({type: "AXIOM_STATS_UPDATE", snapshot: next}, chartSender); await flush();
+  assert.equal(instance.localSaved.recording.rows[0].holders.rows[0].remainingTokenValue, "$17", "Previous observations stay immutable");
+  assert.equal(instance.localSaved.recording.rows[1].holders.rows[0].rank, "30");
+  for (const [tableStatus, mismatch] of [["hidden", false], ["unsupported", false], ["available", true]]) {
+    instance.advance(5000);
+    const changed = recordingSnapshot(instance.now());
+    changed.holdersIntelligence = {...holders, tableStatus, ...(mismatch ? {context: {...holders.context, sourceKey: "wrong-token"}} : {})};
+    instance.send({type: "AXIOM_STATS_UPDATE", snapshot: changed}, chartSender); await flush();
+    recorded = instance.localSaved.recording.rows.at(-1).holders;
+    assert.equal(recorded.rows.length, tableStatus === "unsupported" ? 2 : 0, "Hidden/mismatched rows omitted; supported rows in partial layouts retained");
+    if (mismatch) { assert.equal(recorded.extractedAt, null); assert.equal(recorded.tableStatus, "unavailable"); }
+  }
+  const report = await recordingRequest(instance, "AXIOM_RECORDING_STOP");
+  const {readReport} = require("./recording-report-helpers.js");
+  assert.deepEqual(readReport(report.text).rows, instance.localSaved.recording.rows);
+  assert.match(report.text, /holders.rows contains/); assert.match(report.text, /unspecified price\/valuation basis/);
+  assert.equal((await recordingRequest(instance, "AXIOM_RECORDING_START", {intervalMs: 5000, scope: "supply"})).ok, true);
+  assert.equal(instance.localSaved.recording.rows[0].holders, undefined);
+});
+
 test("Manual recording commands are dashboard-only and require a recent source snapshot", async () => {
   const instance = worker(); let called = false;
   instance.send({type: "AXIOM_RECORDING_START"}, chartSender, () => { called = true; }); await flush(); assert.equal(called, false);
